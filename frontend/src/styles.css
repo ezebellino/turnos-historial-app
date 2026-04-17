@@ -78,6 +78,51 @@ button {
   z-index: 1;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(27, 19, 14, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.reminder-modal {
+  width: min(680px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  padding: 24px;
+  border-radius: 28px;
+  background: rgba(255, 251, 246, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow);
+}
+
+.reminder-list {
+  display: grid;
+  gap: 10px;
+}
+
+.reminder-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(61, 43, 28, 0.08);
+}
+
+.reminder-item span,
+.reminder-item small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
 .topbar {
   display: flex;
   align-items: end;
@@ -321,6 +366,12 @@ button {
   color: var(--muted);
 }
 
+.patient-item small {
+  display: block;
+  margin-top: 8px;
+  color: var(--accent);
+}
+
 .patient-item-active {
   border-color: rgba(190, 106, 63, 0.3);
   background: var(--accent-soft);
@@ -385,6 +436,31 @@ button {
   color: var(--danger);
 }
 
+.session-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.session-summary div {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.session-summary span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.session-summary strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.4rem;
+}
+
 .history-entry {
   padding: 14px 0;
   border-top: 1px solid var(--line);
@@ -443,11 +519,17 @@ button {
   .overview,
   .week-grid,
   .input-row,
-  .action-row {
+  .action-row,
+  .session-summary {
     grid-template-columns: 1fr;
   }
 
   .day-column {
     min-height: auto;
+  }
+
+  .reminder-item {
+    align-items: start;
+    flex-direction: column;
   }
 }

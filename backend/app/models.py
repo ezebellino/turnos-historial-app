@@ -15,6 +15,7 @@ class Patient(Base):
     email: Mapped[str | None] = mapped_column(String(120), default=None)
     diagnosis: Mapped[str | None] = mapped_column(String(160), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    prescribed_sessions: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     appointments: Mapped[list["Appointment"]] = relationship(
@@ -22,6 +23,14 @@ class Patient(Base):
         cascade="all, delete-orphan",
         order_by="Appointment.date.desc()",
     )
+
+    @property
+    def completed_sessions(self) -> int:
+        return sum(1 for appointment in self.appointments if appointment.status == "completed")
+
+    @property
+    def remaining_sessions(self) -> int:
+        return max(self.prescribed_sessions - self.completed_sessions, 0)
 
 
 class Appointment(Base):
@@ -38,4 +47,3 @@ class Appointment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     patient: Mapped["Patient"] = relationship(back_populates="appointments")
-

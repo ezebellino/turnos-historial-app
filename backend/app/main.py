@@ -5,12 +5,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from .database import Base, engine, get_db
+from .database import get_db, init_db
 from .models import Appointment, Patient
-from .schemas import AppointmentCreate, AppointmentRead, AppointmentUpdate, DashboardSummary, PatientCreate, PatientRead
+from .schemas import (
+    AppointmentCreate,
+    AppointmentRead,
+    AppointmentUpdate,
+    DashboardSummary,
+    PatientCreate,
+    PatientRead,
+    PatientUpdate,
+)
 
 
-Base.metadata.create_all(bind=engine)
+init_db()
 
 app = FastAPI(title="Turnos Historial App")
 
@@ -91,10 +99,10 @@ def list_patients(
     search: str | None = Query(default=None, min_length=1),
     db: Session = Depends(get_db),
 ):
-    query = select(Patient).order_by(Patient.full_name.asc())
+    query = select(Patient).options(joinedload(Patient.appointments)).order_by(Patient.full_name.asc())
     if search:
         query = query.where(Patient.full_name.ilike(f"%{search.strip()}%"))
-    return list(db.scalars(query).all())
+    return list(db.scalars(query).unique().all())
 
 
 @app.post("/patients", response_model=PatientRead, status_code=201)
@@ -102,8 +110,32 @@ def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
     patient = Patient(**payload.model_dump())
     db.add(patient)
     db.commit()
-    db.refresh(patient)
-    return patient
+    statement = (
+        select(Patient)
+        .options(joinedload(Patient.appointments))
+        .where(Patient.id == patient.id)
+    )
+    return db.scalar(statement)
+
+
+@app.patch("/patients/{patient_id}", response_model=PatientRead)
+def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depends(get_db)):
+    patient = db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(patient, field, value)
+
+    db.commit()
+
+    statement = (
+        select(Patient)
+        .options(joinedload(Patient.appointments))
+        .where(Patient.id == patient.id)
+    )
+    return db.scalar(statement)
 
 
 @app.get("/patients/{patient_id}/history", response_model=list[AppointmentRead])

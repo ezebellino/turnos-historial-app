@@ -1,5 +1,5 @@
 from datetime import date, datetime, time
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -13,10 +13,20 @@ class PatientBase(BaseModel):
     email: EmailStr | None = None
     diagnosis: str | None = Field(default=None, max_length=160)
     notes: str | None = None
+    prescribed_sessions: int = Field(default=0, ge=0, le=120)
 
 
 class PatientCreate(PatientBase):
     pass
+
+
+class PatientUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
+    email: EmailStr | None = None
+    diagnosis: str | None = Field(default=None, max_length=160)
+    notes: str | None = None
+    prescribed_sessions: int | None = Field(default=None, ge=0, le=120)
 
 
 class PatientRead(PatientBase):
@@ -24,6 +34,8 @@ class PatientRead(PatientBase):
 
     id: int
     created_at: datetime
+    completed_sessions: int
+    remaining_sessions: int
 
 
 class AppointmentBase(BaseModel):
@@ -41,13 +53,13 @@ class AppointmentCreate(AppointmentBase):
 
 
 class AppointmentUpdate(BaseModel):
-    patient_id: int | None = None
-    date: date | None = None
-    time: time | None = None
-    duration_minutes: int | None = Field(default=None, ge=30, le=120)
-    status: AppointmentStatus | None = None
-    reason: str | None = Field(default=None, max_length=160)
-    evolution_note: str | None = None
+    patient_id: Optional[int] = None
+    date: Optional[date] = None
+    time: Optional[time] = None
+    duration_minutes: Optional[int] = Field(default=None, ge=30, le=120)
+    status: Optional[AppointmentStatus] = None
+    reason: Optional[str] = Field(default=None, max_length=160)
+    evolution_note: Optional[str] = None
 
 
 class AppointmentRead(AppointmentBase):

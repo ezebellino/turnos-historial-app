@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
@@ -16,10 +16,21 @@ class Base(DeclarativeBase):
     pass
 
 
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        patient_columns = {column["name"] for column in inspector.get_columns("patients")}
+        if "prescribed_sessions" not in patient_columns:
+            connection.execute(
+                text("ALTER TABLE patients ADD COLUMN prescribed_sessions INTEGER NOT NULL DEFAULT 0")
+            )
+
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-

@@ -8,6 +8,7 @@ import {
   fetchPatientHistory,
   fetchPatients,
   updateAppointment,
+  updatePatient,
 } from "./api";
 
 const weekdayFormatter = new Intl.DateTimeFormat("es-AR", {
@@ -39,6 +40,7 @@ const DEFAULT_PATIENT_FORM = {
   email: "",
   diagnosis: "",
   notes: "",
+  prescribed_sessions: 10,
 };
 
 const DEFAULT_APPOINTMENT_FORM = {
@@ -75,22 +77,35 @@ function formatClock(dateString, timeString) {
   return timeFormatter.format(new Date(`${dateString}T${timeString}`));
 }
 
+function sanitizeWhatsappNumber(phone) {
+  return (phone || "").replace(/\D/g, "");
+}
+
+function buildWhatsappMessage(appointment) {
+  const time = formatClock(appointment.date, appointment.time);
+  return `Hola ${appointment.patient.full_name}, te recordamos tu turno de kinesiologia de hoy a las ${time}.`;
+}
+
 export default function App() {
   const [weekAnchor, setWeekAnchor] = useState(new Date());
   const [dashboard, setDashboard] = useState(null);
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [todayAppointments, setTodayAppointments] = useState([]);
+  const [showReminders, setShowReminders] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
   const [selectedPatientId, setSelectedPatientId] = useState(null);
   const [history, setHistory] = useState([]);
   const [patientSearch, setPatientSearch] = useState("");
   const [patientForm, setPatientForm] = useState(DEFAULT_PATIENT_FORM);
+  const [editingPatientForm, setEditingPatientForm] = useState(DEFAULT_PATIENT_FORM);
   const [appointmentForm, setAppointmentForm] = useState({
     ...DEFAULT_APPOINTMENT_FORM,
     date: toDateInputValue(getWeekRange(new Date())[0]),
   });
   const [editingForm, setEditingForm] = useState(DEFAULT_APPOINTMENT_FORM);
   const [savingPatient, setSavingPatient] = useState(false);
+  const [savingPatientEdit, setSavingPatientEdit] = useState(false);
   const [savingAppointment, setSavingAppointment] = useState(false);
   const [savingEdition, setSavingEdition] = useState(false);
   const [deletingAppointment, setDeletingAppointment] = useState(false);
@@ -102,6 +117,7 @@ export default function App() {
 
   useEffect(() => {
     loadDashboard();
+    loadTodayAppointments();
   }, []);
 
   useEffect(() => {
@@ -121,6 +137,23 @@ export default function App() {
       .then(setHistory)
       .catch((error) => setErrorMessage(error.message));
   }, [selectedPatientId]);
+
+  useEffect(() => {
+    const selectedPatient = patients.find((patient) => patient.id === selectedPatientId);
+    if (!selectedPatient) {
+      setEditingPatientForm(DEFAULT_PATIENT_FORM);
+      return;
+    }
+
+    setEditingPatientForm({
+      full_name: selectedPatient.full_name,
+      phone: selectedPatient.phone || "",
+      email: selectedPatient.email || "",
+      diagnosis: selectedPatient.diagnosis || "",
+      notes: selectedPatient.notes || "",
+      prescribed_sessions: selectedPatient.prescribed_sessions,
+    });
+  }, [patients, selectedPatientId]);
 
   useEffect(() => {
     const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId);
@@ -144,6 +177,17 @@ export default function App() {
     try {
       const data = await fetchDashboard();
       setDashboard(data);
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  }
+
+  async function loadTodayAppointments() {
+    try {
+      const today = toDateInputValue(new Date());
+      const data = await fetchAppointments(today, today);
+      setTodayAppointments(data);
+      setShowReminders(data.length > 0);
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -181,6 +225,7 @@ export default function App() {
     await Promise.all([
       loadAppointments(weekStart, weekEnd),
       loadDashboard(),
+      loadTodayAppointments(),
       patientId ? fetchPatientHistory(patientId).then(setHistory) : Promise.resolve(),
     ]);
   }
@@ -239,6 +284,26 @@ export default function App() {
       setErrorMessage(error.message);
     } finally {
       setSavingAppointment(false);
+    }
+  }
+
+  async function handlePatientEditSubmit(event) {
+    event.preventDefault();
+    if (!selectedPatientId) {
+      return;
+    }
+
+    setSavingPatientEdit(true);
+    setErrorMessage("");
+
+    try {
+      await updatePatient(selectedPatientId, editingPatientForm);
+      await loadPatients(patientSearch);
+      await refreshAgendaAndHistory(selectedPatientId);
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setSavingPatientEdit(false);
     }
   }
 
@@ -305,6 +370,17 @@ export default function App() {
     }
   }
 
+  function openWhatsappReminder(appointment) {
+    const phone = sanitizeWhatsappNumber(appointment.patient.phone);
+    if (!phone) {
+      setErrorMessage("El paciente no tiene un telefono valido para WhatsApp.");
+      return;
+    }
+
+    const message = encodeURIComponent(buildWhatsappMessage(appointment));
+    window.open(`https://wa.me/${phone}?text=${message}`, "_blank", "noopener,noreferrer");
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === selectedPatientId) ?? null;
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
 
@@ -321,6 +397,42 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {showReminders ? (
+        <div className="modal-backdrop" onClick={() => setShowReminders(false)}>
+          <section className="reminder-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Turnos de hoy</p>
+                <h2>Recordatorios</h2>
+              </div>
+              <button type="button" className="ghost-button" onClick={() => setShowReminders(false)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="reminder-list">
+              {todayAppointments.map((appointment) => (
+                <article key={appointment.id} className="reminder-item">
+                  <div>
+                    <strong>{appointment.patient.full_name}</strong>
+                    <span>{formatClock(appointment.date, appointment.time)}</span>
+                    <small>{appointment.patient.phone || "Sin telefono"}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => openWhatsappReminder(appointment)}
+                    disabled={!sanitizeWhatsappNumber(appointment.patient.phone)}
+                  >
+                    WhatsApp
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <div className="page-glow page-glow-left" />
       <div className="page-glow page-glow-right" />
 
@@ -330,6 +442,9 @@ export default function App() {
           <h1>Agenda y pacientes</h1>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="ghost-button" onClick={() => setShowReminders(true)}>
+            Turnos de hoy
+          </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(-1)}>
             Semana anterior
           </button>
@@ -457,6 +572,7 @@ export default function App() {
                 >
                   <strong>{patient.full_name}</strong>
                   <span>{patient.diagnosis || "Sin diagnostico"}</span>
+                  <small>{`${patient.completed_sessions}/${patient.prescribed_sessions} sesiones`}</small>
                 </button>
               ))}
             </div>
@@ -478,7 +594,7 @@ export default function App() {
                 onChange={(event) => setPatientForm((current) => ({ ...current, full_name: event.target.value }))}
               />
               <input
-                placeholder="Telefono"
+                placeholder="Telefono con codigo pais"
                 value={patientForm.phone}
                 onChange={(event) => setPatientForm((current) => ({ ...current, phone: event.target.value }))}
               />
@@ -492,6 +608,19 @@ export default function App() {
                 value={patientForm.diagnosis}
                 onChange={(event) => setPatientForm((current) => ({ ...current, diagnosis: event.target.value }))}
               />
+              <input
+                type="number"
+                min="0"
+                max="120"
+                placeholder="Cantidad de sesiones"
+                value={patientForm.prescribed_sessions}
+                onChange={(event) =>
+                  setPatientForm((current) => ({
+                    ...current,
+                    prescribed_sessions: Number(event.target.value),
+                  }))
+                }
+              />
               <textarea
                 rows="3"
                 placeholder="Notas"
@@ -502,6 +631,75 @@ export default function App() {
                 {savingPatient ? "Guardando..." : "Guardar paciente"}
               </button>
             </form>
+          </section>
+
+          <section className="pane">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Editar paciente</p>
+                <h2>{selectedPatient ? selectedPatient.full_name : "Seleccionar"}</h2>
+              </div>
+            </div>
+
+            {selectedPatient ? (
+              <form className="stack-form" onSubmit={handlePatientEditSubmit}>
+                <input
+                  required
+                  placeholder="Nombre y apellido"
+                  value={editingPatientForm.full_name}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({ ...current, full_name: event.target.value }))
+                  }
+                />
+                <input
+                  placeholder="Telefono con codigo pais"
+                  value={editingPatientForm.phone}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({ ...current, phone: event.target.value }))
+                  }
+                />
+                <input
+                  placeholder="Email"
+                  value={editingPatientForm.email}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({ ...current, email: event.target.value }))
+                  }
+                />
+                <input
+                  placeholder="Diagnostico"
+                  value={editingPatientForm.diagnosis}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({ ...current, diagnosis: event.target.value }))
+                  }
+                />
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  placeholder="Cantidad de sesiones"
+                  value={editingPatientForm.prescribed_sessions}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({
+                      ...current,
+                      prescribed_sessions: Number(event.target.value),
+                    }))
+                  }
+                />
+                <textarea
+                  rows="3"
+                  placeholder="Notas"
+                  value={editingPatientForm.notes}
+                  onChange={(event) =>
+                    setEditingPatientForm((current) => ({ ...current, notes: event.target.value }))
+                  }
+                />
+                <button className="primary-button" type="submit" disabled={savingPatientEdit}>
+                  {savingPatientEdit ? "Guardando..." : "Guardar paciente"}
+                </button>
+              </form>
+            ) : (
+              <div className="empty-history">Elegi un paciente para editarlo.</div>
+            )}
           </section>
 
           <section className="pane">
@@ -643,6 +841,23 @@ export default function App() {
                 <h2>{selectedPatient ? selectedPatient.full_name : "Sin seleccionar"}</h2>
               </div>
             </div>
+
+            {selectedPatient ? (
+              <div className="session-summary">
+                <div>
+                  <span>Plan</span>
+                  <strong>{selectedPatient.prescribed_sessions}</strong>
+                </div>
+                <div>
+                  <span>Realizadas</span>
+                  <strong>{selectedPatient.completed_sessions}</strong>
+                </div>
+                <div>
+                  <span>Restantes</span>
+                  <strong>{selectedPatient.remaining_sessions}</strong>
+                </div>
+              </div>
+            ) : null}
 
             <div className="history-list">
               {history.length === 0 ? (

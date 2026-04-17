@@ -37,6 +37,13 @@ export function createPatient(payload) {
   });
 }
 
+export function updatePatient(id, payload) {
+  return request(`/patients/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchAppointments(start, end) {
   return request(`/appointments?start=${start}&end=${end}`);
 }
