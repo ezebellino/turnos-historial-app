@@ -360,6 +360,13 @@ button {
   background: rgba(255, 255, 255, 0.5);
 }
 
+.patient-item-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .patient-item span {
   display: block;
   margin-top: 4px;
@@ -375,6 +382,21 @@ button {
 .patient-item-active {
   border-color: rgba(190, 106, 63, 0.3);
   background: var(--accent-soft);
+}
+
+.text-button {
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.swal-patient-modal .swal2-html-container {
+  margin: 12px 0 0;
+}
+
+.swal-form-grid {
+  display: grid;
+  gap: 8px;
 }
 
 .stack-form {

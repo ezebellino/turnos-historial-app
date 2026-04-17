@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,7 +39,11 @@ def validate_business_rules(payload: AppointmentCreate, db: Session, appointment
     if payload.date.weekday() > 4:
         raise HTTPException(status_code=400, detail="Solo se permiten turnos de lunes a viernes.")
 
-    if payload.time.hour < WORK_START_HOUR or payload.time.hour >= WORK_END_HOUR:
+    start_time = payload.time
+    end_datetime = datetime.combine(payload.date, start_time) + timedelta(minutes=payload.duration_minutes)
+    end_time = end_datetime.time()
+
+    if start_time < time(hour=WORK_START_HOUR) or end_time > time(hour=WORK_END_HOUR):
         raise HTTPException(status_code=400, detail="El horario debe estar entre las 08:00 y las 20:00.")
 
     overlapping_query = select(Appointment).where(
