@@ -1,0 +1,41 @@
+from datetime import date, datetime, time
+
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, Time
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+class Patient(Base):
+    __tablename__ = "patients"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(120), index=True)
+    phone: Mapped[str | None] = mapped_column(String(40), default=None)
+    email: Mapped[str | None] = mapped_column(String(120), default=None)
+    diagnosis: Mapped[str | None] = mapped_column(String(160), default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    appointments: Mapped[list["Appointment"]] = relationship(
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        order_by="Appointment.date.desc()",
+    )
+
+
+class Appointment(Base):
+    __tablename__ = "appointments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    time: Mapped[time] = mapped_column(Time, index=True)
+    duration_minutes: Mapped[int] = mapped_column(default=60)
+    status: Mapped[str] = mapped_column(String(20), default="scheduled")
+    reason: Mapped[str | None] = mapped_column(String(160), default=None)
+    evolution_note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    patient: Mapped["Patient"] = relationship(back_populates="appointments")
+
