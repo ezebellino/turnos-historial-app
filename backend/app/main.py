@@ -7,14 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .database import Base, engine, get_db
 from .models import Appointment, Patient
-from .schemas import (
-    AppointmentCreate,
-    AppointmentRead,
-    AppointmentUpdate,
-    DashboardSummary,
-    PatientCreate,
-    PatientRead,
-)
+from .schemas import AppointmentCreate, AppointmentRead, AppointmentUpdate, DashboardSummary, PatientCreate, PatientRead
 
 
 Base.metadata.create_all(bind=engine)
@@ -52,6 +45,18 @@ def validate_business_rules(payload: AppointmentCreate, db: Session, appointment
     existing = db.scalar(overlapping_query)
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe un turno en ese horario.")
+
+
+def read_appointment_or_404(appointment_id: int, db: Session):
+    statement = (
+        select(Appointment)
+        .options(joinedload(Appointment.patient))
+        .where(Appointment.id == appointment_id)
+    )
+    appointment = db.scalar(statement)
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Turno no encontrado.")
+    return appointment
 
 
 @app.get("/health")
@@ -165,16 +170,35 @@ def update_appointment(appointment_id: int, payload: AppointmentUpdate, db: Sess
         raise HTTPException(status_code=404, detail="Turno no encontrado.")
 
     changes = payload.model_dump(exclude_unset=True)
+    if "patient_id" in changes:
+        patient = db.get(Patient, changes["patient_id"])
+        if not patient:
+            raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+
+    if {"patient_id", "date", "time", "duration_minutes"} & changes.keys():
+        merged_payload = AppointmentCreate(
+            patient_id=changes.get("patient_id", appointment.patient_id),
+            date=changes.get("date", appointment.date),
+            time=changes.get("time", appointment.time),
+            duration_minutes=changes.get("duration_minutes", appointment.duration_minutes),
+            status=changes.get("status", appointment.status),
+            reason=changes.get("reason", appointment.reason),
+            evolution_note=changes.get("evolution_note", appointment.evolution_note),
+        )
+        validate_business_rules(merged_payload, db, appointment_id=appointment_id)
+
     for field, value in changes.items():
         setattr(appointment, field, value)
 
     db.commit()
-    db.refresh(appointment)
+    return read_appointment_or_404(appointment.id, db)
 
-    statement = (
-        select(Appointment)
-        .options(joinedload(Appointment.patient))
-        .where(Appointment.id == appointment.id)
-    )
-    return db.scalar(statement)
 
+@app.delete("/appointments/{appointment_id}", status_code=204)
+def delete_appointment(appointment_id: int, db: Session = Depends(get_db)):
+    appointment = db.get(Appointment, appointment_id)
+    if not appointment:
+        raise HTTPException(status_code=404, detail="Turno no encontrado.")
+
+    db.delete(appointment)
+    db.commit()

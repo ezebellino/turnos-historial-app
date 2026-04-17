@@ -2,6 +2,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import {
   createAppointment,
   createPatient,
+  deleteAppointment,
   fetchAppointments,
   fetchDashboard,
   fetchPatientHistory,
@@ -40,6 +41,16 @@ const DEFAULT_PATIENT_FORM = {
   notes: "",
 };
 
+const DEFAULT_APPOINTMENT_FORM = {
+  patient_id: "",
+  date: "",
+  time: "08:00",
+  duration_minutes: 60,
+  reason: "",
+  evolution_note: "",
+  status: "scheduled",
+};
+
 function getWeekRange(baseDate) {
   const current = new Date(baseDate);
   const day = current.getDay();
@@ -69,21 +80,20 @@ export default function App() {
   const [dashboard, setDashboard] = useState(null);
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
   const [selectedPatientId, setSelectedPatientId] = useState(null);
   const [history, setHistory] = useState([]);
   const [patientSearch, setPatientSearch] = useState("");
   const [patientForm, setPatientForm] = useState(DEFAULT_PATIENT_FORM);
   const [appointmentForm, setAppointmentForm] = useState({
-    patient_id: "",
+    ...DEFAULT_APPOINTMENT_FORM,
     date: toDateInputValue(getWeekRange(new Date())[0]),
-    time: "08:00",
-    duration_minutes: 60,
-    reason: "",
-    evolution_note: "",
-    status: "scheduled",
   });
+  const [editingForm, setEditingForm] = useState(DEFAULT_APPOINTMENT_FORM);
   const [savingPatient, setSavingPatient] = useState(false);
   const [savingAppointment, setSavingAppointment] = useState(false);
+  const [savingEdition, setSavingEdition] = useState(false);
+  const [deletingAppointment, setDeletingAppointment] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const weekDates = useMemo(() => getWeekRange(weekAnchor), [weekAnchor]);
@@ -112,6 +122,24 @@ export default function App() {
       .catch((error) => setErrorMessage(error.message));
   }, [selectedPatientId]);
 
+  useEffect(() => {
+    const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId);
+    if (!selectedAppointment) {
+      setEditingForm(DEFAULT_APPOINTMENT_FORM);
+      return;
+    }
+
+    setEditingForm({
+      patient_id: String(selectedAppointment.patient.id),
+      date: selectedAppointment.date,
+      time: selectedAppointment.time.slice(0, 5),
+      duration_minutes: selectedAppointment.duration_minutes,
+      reason: selectedAppointment.reason || "",
+      evolution_note: selectedAppointment.evolution_note || "",
+      status: selectedAppointment.status,
+    });
+  }, [appointments, selectedAppointmentId]);
+
   async function loadDashboard() {
     try {
       const data = await fetchDashboard();
@@ -138,9 +166,23 @@ export default function App() {
     try {
       const data = await fetchAppointments(start, end);
       setAppointments(data);
+      setSelectedAppointmentId((current) => {
+        if (current && data.some((appointment) => appointment.id === current)) {
+          return current;
+        }
+        return null;
+      });
     } catch (error) {
       setErrorMessage(error.message);
     }
+  }
+
+  async function refreshAgendaAndHistory(patientId = selectedPatientId) {
+    await Promise.all([
+      loadAppointments(weekStart, weekEnd),
+      loadDashboard(),
+      patientId ? fetchPatientHistory(patientId).then(setHistory) : Promise.resolve(),
+    ]);
   }
 
   function shiftWeek(direction) {
@@ -192,11 +234,7 @@ export default function App() {
         evolution_note: "",
         status: "scheduled",
       }));
-      await Promise.all([
-        loadAppointments(weekStart, weekEnd),
-        loadDashboard(),
-        selectedPatientId ? fetchPatientHistory(selectedPatientId).then(setHistory) : Promise.resolve(),
-      ]);
+      await refreshAgendaAndHistory();
     } catch (error) {
       setErrorMessage(error.message);
     } finally {
@@ -208,17 +246,67 @@ export default function App() {
     setErrorMessage("");
     try {
       await updateAppointment(appointment.id, { status });
-      await Promise.all([
-        loadAppointments(weekStart, weekEnd),
-        loadDashboard(),
-        selectedPatientId ? fetchPatientHistory(selectedPatientId).then(setHistory) : Promise.resolve(),
-      ]);
+      await refreshAgendaAndHistory(appointment.patient.id);
     } catch (error) {
       setErrorMessage(error.message);
     }
   }
 
+  async function handleAppointmentEditSubmit(event) {
+    event.preventDefault();
+    if (!selectedAppointmentId) {
+      return;
+    }
+
+    setSavingEdition(true);
+    setErrorMessage("");
+
+    try {
+      const updated = await updateAppointment(selectedAppointmentId, {
+        ...editingForm,
+        patient_id: Number(editingForm.patient_id),
+        duration_minutes: Number(editingForm.duration_minutes),
+      });
+      setSelectedPatientId(updated.patient.id);
+      await refreshAgendaAndHistory(updated.patient.id);
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setSavingEdition(false);
+    }
+  }
+
+  async function handleDeleteAppointment() {
+    if (!selectedAppointmentId) {
+      return;
+    }
+
+    const appointment = appointments.find((item) => item.id === selectedAppointmentId);
+    if (!appointment) {
+      return;
+    }
+
+    const confirmed = window.confirm("¿Eliminar este turno?");
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAppointment(true);
+    setErrorMessage("");
+
+    try {
+      await deleteAppointment(selectedAppointmentId);
+      setSelectedAppointmentId(null);
+      await refreshAgendaAndHistory(appointment.patient.id);
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setDeletingAppointment(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === selectedPatientId) ?? null;
+  const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
 
   const appointmentsByDay = useMemo(() => {
     return weekDates.map((date) => {
@@ -302,8 +390,13 @@ export default function App() {
                       <button
                         type="button"
                         key={appointment.id}
-                        className="appointment-item"
-                        onClick={() => setSelectedPatientId(appointment.patient.id)}
+                        className={`appointment-item ${
+                          selectedAppointmentId === appointment.id ? "appointment-item-active" : ""
+                        }`}
+                        onClick={() => {
+                          setSelectedPatientId(appointment.patient.id);
+                          setSelectedAppointmentId(appointment.id);
+                        }}
                       >
                         <div className="appointment-main">
                           <strong>{appointment.patient.full_name}</strong>
@@ -465,6 +558,82 @@ export default function App() {
                 {savingAppointment ? "Guardando..." : "Guardar turno"}
               </button>
             </form>
+          </section>
+
+          <section className="pane">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Editar turno</p>
+                <h2>{selectedAppointment ? "Detalle" : "Seleccionar"}</h2>
+              </div>
+            </div>
+
+            {selectedAppointment ? (
+              <form className="stack-form" onSubmit={handleAppointmentEditSubmit}>
+                <select
+                  required
+                  value={editingForm.patient_id}
+                  onChange={(event) => setEditingForm((current) => ({ ...current, patient_id: event.target.value }))}
+                >
+                  <option value="">Seleccionar paciente</option>
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patient.full_name}
+                    </option>
+                  ))}
+                </select>
+                <div className="input-row">
+                  <input
+                    required
+                    type="date"
+                    value={editingForm.date}
+                    onChange={(event) => setEditingForm((current) => ({ ...current, date: event.target.value }))}
+                  />
+                  <input
+                    required
+                    type="time"
+                    value={editingForm.time}
+                    onChange={(event) => setEditingForm((current) => ({ ...current, time: event.target.value }))}
+                  />
+                </div>
+                <select
+                  value={editingForm.status}
+                  onChange={(event) => setEditingForm((current) => ({ ...current, status: event.target.value }))}
+                >
+                  <option value="scheduled">Programado</option>
+                  <option value="completed">Realizado</option>
+                  <option value="cancelled">Cancelado</option>
+                </select>
+                <input
+                  placeholder="Motivo"
+                  value={editingForm.reason}
+                  onChange={(event) => setEditingForm((current) => ({ ...current, reason: event.target.value }))}
+                />
+                <textarea
+                  rows="3"
+                  placeholder="Evolucion"
+                  value={editingForm.evolution_note}
+                  onChange={(event) =>
+                    setEditingForm((current) => ({ ...current, evolution_note: event.target.value }))
+                  }
+                />
+                <div className="action-row">
+                  <button className="primary-button" type="submit" disabled={savingEdition}>
+                    {savingEdition ? "Guardando..." : "Guardar cambios"}
+                  </button>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    onClick={handleDeleteAppointment}
+                    disabled={deletingAppointment}
+                  >
+                    {deletingAppointment ? "Eliminando..." : "Eliminar"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="empty-history">Elegi un turno de la agenda para editarlo.</div>
+            )}
           </section>
 
           <section className="pane history-pane">

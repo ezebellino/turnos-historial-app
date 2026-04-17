@@ -41,6 +41,10 @@ class AppointmentCreate(AppointmentBase):
 
 
 class AppointmentUpdate(BaseModel):
+    patient_id: int | None = None
+    date: date | None = None
+    time: time | None = None
+    duration_minutes: int | None = Field(default=None, ge=30, le=120)
     status: AppointmentStatus | None = None
     reason: str | None = Field(default=None, max_length=160)
     evolution_note: str | None = None
@@ -59,4 +63,3 @@ class DashboardSummary(BaseModel):
     upcoming_appointments: int
     completed_sessions: int
     today_label: str
-

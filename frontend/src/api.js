@@ -14,6 +14,10 @@ async function request(path, options = {}) {
     throw new Error(payload.detail || "No se pudo completar la solicitud.");
   }
 
+  if (response.status === 204) {
+    return null;
+  }
+
   return response.json();
 }
 
@@ -51,7 +55,12 @@ export function updateAppointment(id, payload) {
   });
 }
 
+export function deleteAppointment(id) {
+  return request(`/appointments/${id}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchPatientHistory(patientId) {
   return request(`/patients/${patientId}/history`);
 }
-
