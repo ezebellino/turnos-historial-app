@@ -5,6 +5,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 
 const BACKEND_URL = "http://127.0.0.1:8000/health";
 const FRONTEND_DEV_URL = process.env.FRONTEND_DEV_URL || "http://127.0.0.1:5173";
+const APP_USER_MODEL_ID = "com.ezebellino.turnoshistorial";
 let backendProcess = null;
 let backendManagedByApp = false;
 
@@ -34,9 +35,15 @@ async function backendIsReachable() {
 }
 
 async function startBackend() {
-  if (await backendIsReachable()) {
+  if (!app.isPackaged && (await backendIsReachable())) {
     backendManagedByApp = false;
     return;
+  }
+
+  if (app.isPackaged && (await backendIsReachable())) {
+    throw new Error(
+      "Ya hay otra instancia del backend usando 127.0.0.1:8000. Cierra cualquier Turnos Historial App o backend anterior y vuelve a abrir el portable.",
+    );
   }
 
   const dataDir = resolvePortableDataDir();
@@ -96,7 +103,9 @@ async function waitForBackend(timeoutMs = 15000) {
 }
 
 function createWindow() {
-  const windowIcon = path.join(app.getAppPath(), "frontend", "iconoTurnosHistorialAPP.ico");
+  const windowIcon = app.isPackaged
+    ? path.join(process.resourcesPath, "iconoTurnosHistorialAPP.ico")
+    : path.join(app.getAppPath(), "frontend", "iconoTurnosHistorialAPP.ico");
   const window = new BrowserWindow({
     width: 1480,
     height: 920,
@@ -139,6 +148,7 @@ function stopBackend() {
 
 app.whenReady().then(async () => {
   try {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
     await startBackend();
     await waitForBackend();
     createWindow();

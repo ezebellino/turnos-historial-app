@@ -29,6 +29,10 @@
       {
         "from": "backend/dist/turnos-historial-backend.exe",
         "to": "backend/turnos-historial-backend.exe"
+      },
+      {
+        "from": "frontend/iconoTurnosHistorialAPP.ico",
+        "to": "iconoTurnosHistorialAPP.ico"
       }
     ],
     "win": {

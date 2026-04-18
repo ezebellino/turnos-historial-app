@@ -362,6 +362,18 @@ def update_patient(
     return db.scalar(statement)
 
 
+@app.delete("/patients/{patient_id}", status_code=204)
+def delete_patient(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    patient = read_patient_or_404(patient_id, db)
+    delete_patient_photo_file(patient.photo_filename)
+    db.delete(patient)
+    db.commit()
+
+
 @app.post("/patients/{patient_id}/photo", response_model=PatientRead)
 def upload_patient_photo(
     patient_id: int,

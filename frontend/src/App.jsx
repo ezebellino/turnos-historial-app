@@ -4,6 +4,7 @@ import {
   clearStoredSessionToken,
   createAppointment,
   createPatient,
+  deletePatient,
   deletePatientPhoto,
   deleteAppointment,
   fetchAppointments,
@@ -351,8 +352,8 @@ function LoginScreen({
         <div className="auth-brand-header">
           <img src={appLogo} alt="Turnos Historial App" className="auth-logo" />
           <div>
-            <p className="eyebrow">Turnos Historial App</p>
             <h1>{mode === "setup" ? "Configurar acceso" : mode === "recover" ? "Recuperar acceso" : "Ingresar"}</h1>
+            <p className="auth-tagline">Turnos, historial y acompanamiento.</p>
           </div>
         </div>
         <p className="auth-copy">
@@ -615,7 +616,7 @@ function SchedulerApp({ authUser, onLogout }) {
 
   async function openNewPatientModal() {
     const { value: formValues } = await Swal.fire({
-      title: "Alta rapida",
+      title: "Nuevo paciente",
       html: patientFormHtml(),
       focusConfirm: false,
       confirmButtonText: "Guardar",
@@ -652,16 +653,66 @@ function SchedulerApp({ authUser, onLogout }) {
   }
 
   async function openPatientEditor(patient) {
-    const { value: formValues } = await Swal.fire({
+    const { value: formValues, isDenied } = await Swal.fire({
       title: "Editar paciente",
       html: patientFormHtml(patient),
       focusConfirm: false,
       confirmButtonText: "Guardar",
+      denyButtonText: "Eliminar",
       cancelButtonText: "Cancelar",
       showCancelButton: true,
+      showDenyButton: true,
       customClass: { popup: "swal-patient-modal" },
       preConfirm: readPatientFormValues,
     });
+
+    if (isDenied) {
+      const confirmation = await Swal.fire({
+        title: "Eliminar paciente",
+        text: `Se borrara ${patient.full_name} con sus turnos e historial.`,
+        icon: "warning",
+        confirmButtonText: "Eliminar",
+        cancelButtonText: "Cancelar",
+        showCancelButton: true,
+        confirmButtonColor: "#b14d5d",
+      });
+
+      if (!confirmation.isConfirmed) {
+        return;
+      }
+
+      setErrorMessage("");
+      try {
+        await deletePatient(patient.id);
+        const nextPatientId =
+          patients.find((entry) => entry.id !== patient.id)?.id ?? null;
+        setSelectedAppointmentId((current) =>
+          appointments.some(
+            (appointment) => appointment.id === current && appointment.patient.id !== patient.id,
+          )
+            ? current
+            : null,
+        );
+        setSelectedPatientId(nextPatientId);
+        setSideSection(nextPatientId ? "history" : "patients");
+        await refreshAgendaAndHistory(nextPatientId);
+        await Swal.fire({
+          title: "Paciente eliminado",
+          icon: "success",
+          timer: 1200,
+          showConfirmButton: false,
+        });
+      } catch (error) {
+        setErrorMessage(error.message);
+        await Swal.fire({
+          title: "No se pudo eliminar",
+          text: error.message,
+          icon: "error",
+          confirmButtonText: "Cerrar",
+        });
+      }
+      return;
+    }
 
     if (!formValues) {
       return;
@@ -1020,7 +1071,7 @@ function SchedulerApp({ authUser, onLogout }) {
           <section className="pane sidebar-pane">
             <div className="sidebar-actions">
               <button type="button" className="primary-button" onClick={openNewPatientModal}>
-                Alta rapida
+                Nuevo paciente
               </button>
               <button type="button" className="primary-button" onClick={() => openNewAppointmentModal()}>
                 Nuevo turno
@@ -1249,9 +1300,11 @@ function SchedulerApp({ authUser, onLogout }) {
                                   <strong>{appointment.patient.full_name}</strong>
                                   <small>{appointment.reason || "Sesion general"}</small>
                                 </div>
-                                <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
-                                  {STATUS_LABELS[appointment.status]}
-                                </span>
+                                <div className="appointment-row-meta">
+                                  <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
+                                    {STATUS_LABELS[appointment.status]}
+                                  </span>
+                                </div>
                               </button>
                             ))}
                           </div>
@@ -1304,9 +1357,11 @@ function SchedulerApp({ authUser, onLogout }) {
                               <strong>{appointment.patient.full_name}</strong>
                               <small>{appointment.reason || "Sesion general"}</small>
                             </div>
-                            <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
-                              {STATUS_LABELS[appointment.status]}
-                            </span>
+                            <div className="appointment-row-meta">
+                              <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
+                                {STATUS_LABELS[appointment.status]}
+                              </span>
+                            </div>
                           </button>
                         ))}
                       </div>

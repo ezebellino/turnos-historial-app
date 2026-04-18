@@ -62,8 +62,8 @@ select {
 }
 
 .auth-card {
-  width: min(540px, 100%);
-  padding: 32px;
+  width: min(620px, 100%);
+  padding: 40px;
   border-radius: 32px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.9));
@@ -79,21 +79,38 @@ select {
 }
 
 .auth-brand-header {
-  display: flex;
-  align-items: center;
+  display: grid;
+  justify-items: center;
+  text-align: center;
   gap: 18px;
+  width: 100%;
 }
 
 .auth-logo {
-  width: 92px;
-  height: 92px;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
   object-fit: contain;
-  filter: drop-shadow(0 16px 32px rgba(45, 108, 223, 0.14));
+  filter: drop-shadow(0 24px 40px rgba(45, 108, 223, 0.16));
+}
+
+.auth-brand-header h1 {
+  margin-top: 0;
+}
+
+.auth-tagline {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .auth-copy {
-  margin: 12px 0 0;
+  margin: 18px auto 0;
   color: var(--muted);
+  max-width: 46ch;
+  text-align: center;
+  line-height: 1.6;
 }
 
 .auth-form {
@@ -127,9 +144,11 @@ select {
 
 .auth-links {
   display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-top: 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  margin-top: 22px;
 }
 
 .auth-error {
@@ -586,9 +605,7 @@ select {
 .appointment-row {
   width: 100%;
   min-width: 0;
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
+  display: grid;
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid rgba(45, 108, 223, 0.08);
@@ -598,7 +615,6 @@ select {
 }
 
 .appointment-row-detailed {
-  align-items: center;
   padding: 14px 16px;
 }
 
@@ -613,9 +629,16 @@ select {
   gap: 4px;
 }
 
+.appointment-row-meta {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .appointment-row strong {
   display: block;
-  overflow-wrap: anywhere;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  hyphens: auto;
   line-height: 1.2;
   font-size: 0.95rem;
 }

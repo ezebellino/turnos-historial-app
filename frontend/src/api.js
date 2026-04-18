@@ -130,6 +130,12 @@ export function deletePatientPhoto(id) {
   });
 }
 
+export function deletePatient(id) {
+  return request(`/patients/${id}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchAppointments(start, end) {
   return request(`/appointments?start=${start}&end=${end}`);
 }

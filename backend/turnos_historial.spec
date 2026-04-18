@@ -7,6 +7,9 @@ a = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
+        "multipart",
+        "multipart.multipart",
+        "python_multipart",
         "uvicorn.logging",
         "uvicorn.loops.auto",
         "uvicorn.protocols.http.auto",
