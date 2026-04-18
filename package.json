@@ -9,12 +9,14 @@
     "backend:dev": "node desktop/backend-dev.cjs",
     "backend:build": "node desktop/backend-build.cjs",
     "desktop:dev": "node desktop/dev.cjs",
-    "desktop:portable": "npm run frontend:build && npm run backend:build && electron-builder --win portable"
+    "desktop:portable": "node desktop/portable-build.cjs"
   },
   "devDependencies": {
     "electron": "^36.3.2",
     "electron-builder": "^26.0.12"
   },
+  "description": "Agenda local para pacientes, turnos e historial de atencion de kinesiologia.",
+  "author": "Eze Bellino",
   "build": {
     "appId": "com.ezebellino.turnoshistorial",
     "productName": "Turnos Historial App",
@@ -30,6 +32,8 @@
       }
     ],
     "win": {
+      "icon": "frontend/iconoTurnosHistorialAPP.ico",
+      "signAndEditExecutable": false,
       "target": [
         "portable"
       ],

@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ["backend/desktop_server.py"],
-    pathex=["backend"],
+    ["desktop_server.py"],
+    pathex=["."],
     binaries=[],
     datas=[],
     hiddenimports=[

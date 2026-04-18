@@ -1,9 +1,11 @@
 const path = require("path");
+const fs = require("fs");
 const { spawn } = require("child_process");
 
 const rootDir = path.resolve(__dirname, "..");
 const frontendDir = path.join(rootDir, "frontend");
 const frontendUrl = "http://127.0.0.1:5173";
+const electronBin = path.join(rootDir, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron");
 
 let viteProcess = null;
 let electronProcess = null;
@@ -49,7 +51,7 @@ async function main() {
   viteProcess = spawn("npm.cmd", ["run", "dev", "--", "--host", "127.0.0.1"], {
     cwd: frontendDir,
     stdio: "inherit",
-    shell: false,
+    shell: true,
   });
 
   viteProcess.on("exit", (code) => {
@@ -60,19 +62,19 @@ async function main() {
 
   await waitForUrl(frontendUrl);
 
-  electronProcess = spawn(
-    process.execPath,
-    [path.join(rootDir, "node_modules", "electron", "cli.js"), "."],
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        FRONTEND_DEV_URL: frontendUrl,
-      },
-      shell: false,
+  if (!fs.existsSync(electronBin)) {
+    throw new Error("No se encontro Electron. Ejecuta npm install en la raiz del proyecto.");
+  }
+
+  electronProcess = spawn(electronBin, ["."], {
+    cwd: rootDir,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      FRONTEND_DEV_URL: frontendUrl,
     },
-  );
+    shell: true,
+  });
 
   electronProcess.on("exit", (code) => {
     shutdown(code ?? 0);

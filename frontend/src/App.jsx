@@ -23,6 +23,7 @@ import {
   updateAppointment,
   updatePatient,
 } from "./api";
+import appLogo from "../logoTurnosHistorialAPP.png";
 
 const weekdayFormatter = new Intl.DateTimeFormat("es-AR", {
   weekday: "short",
@@ -347,8 +348,13 @@ function LoginScreen({
   return (
     <div className="auth-shell">
       <div className="auth-card">
-        <p className="eyebrow">Turnos Historial App</p>
-        <h1>{mode === "setup" ? "Configurar acceso" : mode === "recover" ? "Recuperar acceso" : "Ingresar"}</h1>
+        <div className="auth-brand-header">
+          <img src={appLogo} alt="Turnos Historial App" className="auth-logo" />
+          <div>
+            <p className="eyebrow">Turnos Historial App</p>
+            <h1>{mode === "setup" ? "Configurar acceso" : mode === "recover" ? "Recuperar acceso" : "Ingresar"}</h1>
+          </div>
+        </div>
         <p className="auth-copy">
           {mode === "setup"
             ? "Crea el usuario local de esta PC. Despues podras entrar con username y contraseña."
@@ -490,6 +496,7 @@ function LoginScreen({
 
 function SchedulerApp({ authUser, onLogout }) {
   const [weekAnchor, setWeekAnchor] = useState(new Date());
+  const [agendaView, setAgendaView] = useState("week");
   const [dashboard, setDashboard] = useState(null);
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
@@ -500,6 +507,8 @@ function SchedulerApp({ authUser, onLogout }) {
   const [history, setHistory] = useState([]);
   const [patientSearch, setPatientSearch] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [sideSection, setSideSection] = useState("patients");
+  const [selectedDayKey, setSelectedDayKey] = useState(toDateInputValue(getNextBusinessDate()));
 
   const weekDates = useMemo(() => getWeekRange(weekAnchor), [weekAnchor]);
   const weekStart = toDateInputValue(weekDates[0]);
@@ -585,6 +594,13 @@ function SchedulerApp({ authUser, onLogout }) {
       loadPatients(patientSearch),
       patientId ? fetchPatientHistory(patientId).then(setHistory) : Promise.resolve(),
     ]);
+  }
+
+  function jumpToCurrentWeek() {
+    startTransition(() => {
+      setWeekAnchor(new Date());
+      setSelectedDayKey(toDateInputValue(getNextBusinessDate()));
+    });
   }
 
   function shiftWeek(direction) {
@@ -865,13 +881,50 @@ function SchedulerApp({ authUser, onLogout }) {
   const appointmentsByDay = useMemo(() => {
     return weekDates.map((date) => {
       const key = toDateInputValue(date);
+      const items = appointments
+        .filter((appointment) => appointment.date === key)
+        .sort((left, right) => {
+          const timeDiff = left.time.localeCompare(right.time);
+          if (timeDiff !== 0) {
+            return timeDiff;
+          }
+          return left.patient.full_name.localeCompare(right.patient.full_name);
+        });
+      const grouped = Object.values(
+        items.reduce((accumulator, appointment) => {
+          const slotKey = appointment.time.slice(0, 5);
+          if (!accumulator[slotKey]) {
+            accumulator[slotKey] = {
+              key: `${key}-${slotKey}`,
+              time: slotKey,
+              items: [],
+            };
+          }
+          accumulator[slotKey].items.push(appointment);
+          return accumulator;
+        }, {}),
+      ).sort((left, right) => left.time.localeCompare(right.time));
+
       return {
         key,
         label: weekdayFormatter.format(date),
-        items: appointments.filter((appointment) => appointment.date === key),
+        items,
+        slots: grouped,
       };
     });
   }, [appointments, weekDates]);
+
+  useEffect(() => {
+    const validKeys = new Set(weekDates.map((date) => toDateInputValue(date)));
+    if (!validKeys.has(selectedDayKey)) {
+      setSelectedDayKey(weekStart);
+    }
+  }, [selectedDayKey, weekDates, weekStart]);
+
+  const selectedDay = appointmentsByDay.find((day) => day.key === selectedDayKey) ?? appointmentsByDay[0];
+  const selectedDaySummary = selectedDay
+    ? `${selectedDay.items.length} ${selectedDay.items.length === 1 ? "turno" : "turnos"}`
+    : "";
 
   return (
     <div className="app-shell">
@@ -915,25 +968,19 @@ function SchedulerApp({ authUser, onLogout }) {
       <div className="page-glow page-glow-right" />
 
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Turnos Historial App</p>
-          <h1>Agenda y pacientes</h1>
-          <p className="session-user">{authUser.full_name}</p>
+        <div className="brand-lockup">
+          <img src={appLogo} alt="Turnos Historial App" className="brand-logo" />
+          <div>
+            <p className="eyebrow">Turnos Historial App</p>
+            <h1>Agenda clinica</h1>
+            <p className="session-user">{authUser.full_name}</p>
+          </div>
         </div>
         <div className="topbar-actions">
-          <button type="button" className="primary-button" onClick={openNewPatientModal}>
-            Alta rapida
-          </button>
-          <button type="button" className="primary-button" onClick={() => openNewAppointmentModal()}>
-            Nuevo turno
-          </button>
-          <button type="button" className="ghost-button" onClick={() => setShowReminders(true)}>
-            Turnos de hoy
-          </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(-1)}>
             Semana anterior
           </button>
-          <button type="button" className="ghost-button" onClick={() => setWeekAnchor(new Date())}>
+          <button type="button" className="ghost-button" onClick={jumpToCurrentWeek}>
             Hoy
           </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(1)}>
@@ -969,203 +1016,309 @@ function SchedulerApp({ authUser, onLogout }) {
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
       <main className="workspace">
-        <section className="agenda-panel">
+        <aside className="sidebar-shell">
+          <section className="pane sidebar-pane">
+            <div className="sidebar-actions">
+              <button type="button" className="primary-button" onClick={openNewPatientModal}>
+                Alta rapida
+              </button>
+              <button type="button" className="primary-button" onClick={() => openNewAppointmentModal()}>
+                Nuevo turno
+              </button>
+              <button type="button" className="ghost-button" onClick={() => setShowReminders(true)}>
+                Turnos de hoy
+              </button>
+            </div>
+
+            <div className="sidebar-nav">
+              <button
+                type="button"
+                className={`sidebar-tab ${sideSection === "patients" ? "sidebar-tab-active" : ""}`}
+                onClick={() => setSideSection("patients")}
+              >
+                Pacientes
+              </button>
+              <button
+                type="button"
+                className={`sidebar-tab ${sideSection === "history" ? "sidebar-tab-active" : ""}`}
+                onClick={() => setSideSection("history")}
+                disabled={!selectedPatient}
+              >
+                Historial
+              </button>
+            </div>
+
+            {sideSection === "patients" ? (
+              <>
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Pacientes</p>
+                    <h2>Registro</h2>
+                  </div>
+                  <input
+                    className="search-input"
+                    type="search"
+                    placeholder="Buscar"
+                    value={patientSearch}
+                    onChange={(event) => setPatientSearch(event.target.value)}
+                  />
+                </div>
+
+                <div className="patient-list patient-list-compact">
+                  {patients.map((patient) => (
+                    <button
+                      key={patient.id}
+                      type="button"
+                      className={`patient-item ${selectedPatientId === patient.id ? "patient-item-active" : ""}`}
+                      onClick={() => {
+                        setSelectedPatientId(patient.id);
+                        setSideSection("history");
+                      }}
+                    >
+                      <div className="patient-item-head">
+                        <div className="patient-avatar-wrap">
+                          {patient.photo_url ? (
+                            <img className="patient-avatar" src={patientPhotoUrl(patient)} alt={patient.full_name} />
+                          ) : (
+                            <div className="patient-avatar patient-avatar-fallback">{patientInitials(patient.full_name)}</div>
+                          )}
+                        </div>
+                        <div>
+                          <strong>{patient.full_name}</strong>
+                          <span>{patient.diagnosis || "Sin diagnostico"}</span>
+                          <small>{`${patient.completed_sessions}/${patient.prescribed_sessions} sesiones`}</small>
+                        </div>
+                        <span
+                          className="text-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openPatientEditor(patient);
+                          }}
+                        >
+                          Editar
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="section-heading">
+                  <div className="history-heading">
+                    {selectedPatient ? (
+                      selectedPatient.photo_url ? (
+                        <img
+                          className="patient-avatar patient-avatar-large"
+                          src={patientPhotoUrl(selectedPatient)}
+                          alt={selectedPatient.full_name}
+                        />
+                      ) : (
+                        <div className="patient-avatar patient-avatar-large patient-avatar-fallback">
+                          {patientInitials(selectedPatient.full_name)}
+                        </div>
+                      )
+                    ) : null}
+                    <div>
+                      <p className="eyebrow">Historial</p>
+                      <h2>{selectedPatient ? selectedPatient.full_name : "Sin seleccionar"}</h2>
+                    </div>
+                  </div>
+                  {selectedPatient ? (
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => openNewAppointmentModal(selectedPatient.id)}
+                    >
+                      Nuevo turno
+                    </button>
+                  ) : null}
+                </div>
+
+                {selectedPatient ? (
+                  <div className="session-summary">
+                    <div>
+                      <span>Plan</span>
+                      <strong>{selectedPatient.prescribed_sessions}</strong>
+                    </div>
+                    <div>
+                      <span>Realizadas</span>
+                      <strong>{selectedPatient.completed_sessions}</strong>
+                    </div>
+                    <div>
+                      <span>Restantes</span>
+                      <strong>{selectedPatient.remaining_sessions}</strong>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="history-list">
+                  {historyPreview.length === 0 ? (
+                    <div className="empty-history">Todavia sin registros.</div>
+                  ) : (
+                    historyPreview.map((entry) => (
+                      <article key={entry.id} className="history-entry">
+                        <div className="history-head">
+                          <strong>{entry.date}</strong>
+                          <span className={`status-chip ${STATUS_CLASS[entry.status]}`}>
+                            {STATUS_LABELS[entry.status]}
+                          </span>
+                        </div>
+                        <p>{entry.reason || "Sesion general"}</p>
+                        <small>{entry.evolution_note || "Sin notas clinicas."}</small>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                {history.length > 2 ? (
+                  <button type="button" className="ghost-button" onClick={openHistoryModal}>
+                    Ver todo
+                  </button>
+                ) : null}
+              </>
+            )}
+          </section>
+        </aside>
+
+        <section className="agenda-panel agenda-panel-wide">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Agenda semanal</p>
-              <h2>{`${weekdayFormatter.format(weekDates[0])} - ${weekdayFormatter.format(weekDates[4])}`}</h2>
+              <p className="eyebrow">{agendaView === "week" ? "Agenda semanal" : "Agenda del dia"}</p>
+              <h2>
+                {agendaView === "week"
+                  ? `${weekdayFormatter.format(weekDates[0])} - ${weekdayFormatter.format(weekDates[4])}`
+                  : selectedDay?.label || ""}
+              </h2>
+              {agendaView === "day" ? <p className="agenda-caption">{selectedDaySummary}</p> : null}
+            </div>
+            <div className="agenda-toolbar">
+              <div className="view-switch">
+                <button
+                  type="button"
+                  className={`view-switch-button ${agendaView === "week" ? "view-switch-button-active" : ""}`}
+                  onClick={() => setAgendaView("week")}
+                >
+                  Semana
+                </button>
+                <button
+                  type="button"
+                  className={`view-switch-button ${agendaView === "day" ? "view-switch-button-active" : ""}`}
+                  onClick={() => setAgendaView("day")}
+                >
+                  Dia
+                </button>
+              </div>
             </div>
           </div>
 
-          <div className="week-grid">
-            {appointmentsByDay.map((day) => (
-              <article key={day.key} className="day-column">
-                <header className="day-column-head">
-                  <span>{day.label}</span>
-                  <strong>{day.items.length}</strong>
-                </header>
+          {agendaView === "week" ? (
+            <div className="week-grid week-grid-scroll">
+              {appointmentsByDay.map((day) => (
+                <article key={day.key} className="day-column">
+                  <header className="day-column-head">
+                    <span>{day.label}</span>
+                    <strong>{day.items.length}</strong>
+                  </header>
 
-                <div className="day-slots">
-                  {day.items.length === 0 ? (
-                    <div className="empty-state">Libre</div>
-                  ) : (
-                    day.items.map((appointment) => (
-                      <article
-                        key={appointment.id}
-                        className={`appointment-card ${
-                          selectedAppointmentId === appointment.id ? "appointment-card-active" : ""
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          className="appointment-card-main"
-                          onClick={() => openAppointmentEditor(appointment)}
-                        >
-                          <div className="appointment-card-head">
-                            <span className="appointment-time">{formatClock(appointment.date, appointment.time)}</span>
-                            <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
-                              {STATUS_LABELS[appointment.status]}
-                            </span>
+                  <div className="day-slots">
+                    {day.items.length === 0 ? (
+                      <div className="empty-state">Libre</div>
+                    ) : (
+                      day.slots.map((slot) => (
+                        <article key={slot.key} className="time-slot-group">
+                          <header className="time-slot-head">
+                            <span className="time-slot-hour">{formatClock(day.key, slot.time)}</span>
+                            <strong>{slot.items.length}</strong>
+                          </header>
+
+                          <div className="time-slot-list">
+                            {slot.items.map((appointment) => (
+                              <button
+                                key={appointment.id}
+                                type="button"
+                                className={`appointment-row ${
+                                  selectedAppointmentId === appointment.id ? "appointment-row-active" : ""
+                                }`}
+                                onClick={() => {
+                                  setSelectedPatientId(appointment.patient.id);
+                                  openAppointmentEditor(appointment);
+                                }}
+                              >
+                                <div className="appointment-row-main">
+                                  <strong>{appointment.patient.full_name}</strong>
+                                  <small>{appointment.reason || "Sesion general"}</small>
+                                </div>
+                                <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
+                                  {STATUS_LABELS[appointment.status]}
+                                </span>
+                              </button>
+                            ))}
                           </div>
-                          <strong>{appointment.patient.full_name}</strong>
-                          <small>{appointment.reason || "Sesion general"}</small>
-                        </button>
-                        <div className="appointment-card-footer">
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="day-view">
+              <div className="day-picker">
+                {appointmentsByDay.map((day) => (
+                  <button
+                    key={day.key}
+                    type="button"
+                    className={`day-pill ${selectedDayKey === day.key ? "day-pill-active" : ""}`}
+                    onClick={() => setSelectedDayKey(day.key)}
+                  >
+                    <span>{day.label}</span>
+                    <strong>{day.items.length}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <section className="day-focus">
+                {selectedDay?.items.length ? (
+                  selectedDay.slots.map((slot) => (
+                    <article key={slot.key} className="time-slot-group time-slot-group-expanded">
+                      <header className="time-slot-head">
+                        <span className="time-slot-hour">{formatClock(selectedDay.key, slot.time)}</span>
+                        <strong>{slot.items.length} pacientes</strong>
+                      </header>
+
+                      <div className="time-slot-list">
+                        {slot.items.map((appointment) => (
                           <button
+                            key={appointment.id}
                             type="button"
-                            className="text-button"
+                            className={`appointment-row appointment-row-detailed ${
+                              selectedAppointmentId === appointment.id ? "appointment-row-active" : ""
+                            }`}
                             onClick={() => {
                               setSelectedPatientId(appointment.patient.id);
                               openAppointmentEditor(appointment);
                             }}
                           >
-                            Editar
+                            <div className="appointment-row-main">
+                              <strong>{appointment.patient.full_name}</strong>
+                              <small>{appointment.reason || "Sesion general"}</small>
+                            </div>
+                            <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
+                              {STATUS_LABELS[appointment.status]}
+                            </span>
                           </button>
-                          <select
-                            value={appointment.status}
-                            onChange={(event) => handleStatusChange(appointment, event.target.value)}
-                          >
-                            <option value="scheduled">Programado</option>
-                            <option value="completed">Realizado</option>
-                            <option value="cancelled">Cancelado</option>
-                          </select>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </article>
-            ))}
-          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <div className="empty-state">Libre</div>
+                )}
+              </section>
+            </div>
+          )}
         </section>
-
-        <aside className="side-panel">
-          <section className="pane">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Pacientes</p>
-                <h2>Registro</h2>
-              </div>
-              <input
-                className="search-input"
-                type="search"
-                placeholder="Buscar"
-                value={patientSearch}
-                onChange={(event) => setPatientSearch(event.target.value)}
-              />
-            </div>
-
-            <div className="patient-list">
-              {patients.map((patient) => (
-                <button
-                  key={patient.id}
-                  type="button"
-                  className={`patient-item ${selectedPatientId === patient.id ? "patient-item-active" : ""}`}
-                  onClick={() => setSelectedPatientId(patient.id)}
-                >
-                  <div className="patient-item-head">
-                    <div className="patient-avatar-wrap">
-                      {patient.photo_url ? (
-                        <img className="patient-avatar" src={patientPhotoUrl(patient)} alt={patient.full_name} />
-                      ) : (
-                        <div className="patient-avatar patient-avatar-fallback">{patientInitials(patient.full_name)}</div>
-                      )}
-                    </div>
-                    <div>
-                      <strong>{patient.full_name}</strong>
-                      <span>{patient.diagnosis || "Sin diagnostico"}</span>
-                      <small>{`${patient.completed_sessions}/${patient.prescribed_sessions} sesiones`}</small>
-                    </div>
-                    <span
-                      className="text-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openPatientEditor(patient);
-                      }}
-                    >
-                      Editar
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="pane history-pane">
-            <div className="section-heading">
-              <div className="history-heading">
-                {selectedPatient ? (
-                  selectedPatient.photo_url ? (
-                    <img
-                      className="patient-avatar patient-avatar-large"
-                      src={patientPhotoUrl(selectedPatient)}
-                      alt={selectedPatient.full_name}
-                    />
-                  ) : (
-                    <div className="patient-avatar patient-avatar-large patient-avatar-fallback">
-                      {patientInitials(selectedPatient.full_name)}
-                    </div>
-                  )
-                ) : null}
-                <div>
-                <p className="eyebrow">Historial</p>
-                <h2>{selectedPatient ? selectedPatient.full_name : "Sin seleccionar"}</h2>
-                </div>
-              </div>
-              {selectedPatient ? (
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => openNewAppointmentModal(selectedPatient.id)}
-                >
-                  Nuevo turno
-                </button>
-              ) : null}
-            </div>
-
-            {selectedPatient ? (
-              <div className="session-summary">
-                <div>
-                  <span>Plan</span>
-                  <strong>{selectedPatient.prescribed_sessions}</strong>
-                </div>
-                <div>
-                  <span>Realizadas</span>
-                  <strong>{selectedPatient.completed_sessions}</strong>
-                </div>
-                <div>
-                  <span>Restantes</span>
-                  <strong>{selectedPatient.remaining_sessions}</strong>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="history-list">
-              {historyPreview.length === 0 ? (
-                <div className="empty-history">Todavia sin registros.</div>
-              ) : (
-                historyPreview.map((entry) => (
-                  <article key={entry.id} className="history-entry">
-                    <div className="history-head">
-                      <strong>{entry.date}</strong>
-                      <span className={`status-chip ${STATUS_CLASS[entry.status]}`}>
-                        {STATUS_LABELS[entry.status]}
-                      </span>
-                    </div>
-                    <p>{entry.reason || "Sesion general"}</p>
-                    <small>{entry.evolution_note || "Sin notas clinicas."}</small>
-                  </article>
-                ))
-              )}
-            </div>
-
-            {history.length > 2 ? (
-              <button type="button" className="ghost-button" onClick={openHistoryModal}>
-                Ver todo
-              </button>
-            ) : null}
-          </section>
-        </aside>
       </main>
     </div>
   );

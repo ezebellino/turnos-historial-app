@@ -6,6 +6,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 const BACKEND_URL = "http://127.0.0.1:8000/health";
 const FRONTEND_DEV_URL = process.env.FRONTEND_DEV_URL || "http://127.0.0.1:5173";
 let backendProcess = null;
+let backendManagedByApp = false;
 
 function resolvePortableDataDir() {
   if (!app.isPackaged) {
@@ -23,7 +24,21 @@ function resolveBackendPython() {
   return { command: "py", args: ["-3", "desktop_server.py"] };
 }
 
-function startBackend() {
+async function backendIsReachable() {
+  try {
+    const response = await fetch(BACKEND_URL);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startBackend() {
+  if (await backendIsReachable()) {
+    backendManagedByApp = false;
+    return;
+  }
+
   const dataDir = resolvePortableDataDir();
 
   if (app.isPackaged) {
@@ -35,6 +50,7 @@ function startBackend() {
       },
       windowsHide: true,
     });
+    backendManagedByApp = true;
     return;
   }
 
@@ -48,10 +64,15 @@ function startBackend() {
     },
     windowsHide: true,
   });
+  backendManagedByApp = true;
 
   backendProcess.on("exit", (code) => {
     if (code && code !== 0) {
-      dialog.showErrorBox("Backend detenido", `El backend de escritorio finalizo con codigo ${code}.`);
+      backendIsReachable().then((reachable) => {
+        if (!reachable) {
+          dialog.showErrorBox("Backend detenido", `El backend de escritorio finalizo con codigo ${code}.`);
+        }
+      });
     }
   });
 }
@@ -75,6 +96,7 @@ async function waitForBackend(timeoutMs = 15000) {
 }
 
 function createWindow() {
+  const windowIcon = path.join(app.getAppPath(), "frontend", "iconoTurnosHistorialAPP.ico");
   const window = new BrowserWindow({
     width: 1480,
     height: 920,
@@ -82,6 +104,7 @@ function createWindow() {
     minHeight: 760,
     backgroundColor: "#f4ede3",
     autoHideMenuBar: true,
+    ...(fs.existsSync(windowIcon) ? { icon: windowIcon } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
     },
@@ -109,14 +132,14 @@ function createWindow() {
 }
 
 function stopBackend() {
-  if (backendProcess && !backendProcess.killed) {
+  if (backendManagedByApp && backendProcess && !backendProcess.killed) {
     backendProcess.kill();
   }
 }
 
 app.whenReady().then(async () => {
   try {
-    startBackend();
+    await startBackend();
     await waitForBackend();
     createWindow();
   } catch (error) {
