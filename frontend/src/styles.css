@@ -39,6 +39,11 @@ button {
   cursor: pointer;
 }
 
+select {
+  border: 0;
+  background: transparent;
+}
+
 #root {
   min-height: 100vh;
 }
@@ -239,7 +244,7 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 0.9fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.82fr);
   gap: 20px;
 }
 
@@ -262,6 +267,11 @@ button {
 
 .search-input {
   width: 140px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.66);
+  min-height: 46px;
+  padding: 12px 14px;
 }
 
 .week-grid {
@@ -272,67 +282,87 @@ button {
 
 .day-column {
   min-height: 520px;
-  padding: 16px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.45);
+  padding: 14px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
-.day-column header {
+.day-column-head {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 14px;
   color: var(--muted);
 }
 
-.day-column strong {
+.day-column-head strong {
   color: var(--text);
 }
 
 .day-slots {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  align-content: start;
   gap: 10px;
 }
 
-.appointment-item {
-  width: 100%;
+.appointment-card {
+  padding: 12px;
+  border-radius: 20px;
   border: 1px solid rgba(190, 106, 63, 0.08);
   background: var(--panel-strong);
-  border-radius: 18px;
-  padding: 14px;
+}
+
+.appointment-card-active {
+  border-color: rgba(190, 106, 63, 0.28);
+  background: rgba(255, 247, 241, 0.98);
+}
+
+.appointment-card-main {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   text-align: left;
-  transition:
-    transform 160ms ease,
-    border-color 160ms ease;
 }
 
-.appointment-item:hover {
-  transform: translateY(-2px);
-  border-color: rgba(190, 106, 63, 0.24);
-}
-
-.appointment-item-active {
-  border-color: rgba(190, 106, 63, 0.3);
-  background: rgba(255, 247, 241, 0.96);
-}
-
-.appointment-main,
-.appointment-meta,
-.history-head {
+.appointment-card-head {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
   align-items: center;
-}
-
-.appointment-main {
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 10px;
 }
 
-.quick-actions select {
-  border: 0;
-  background: transparent;
+.appointment-time {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.appointment-card strong {
+  display: block;
+  line-height: 1.25;
+}
+
+.appointment-card small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.appointment-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(61, 43, 28, 0.08);
+}
+
+.appointment-card-footer select {
+  max-width: 110px;
   color: var(--muted);
 }
 
@@ -385,13 +415,20 @@ button {
 }
 
 .text-button {
+  border: 0;
+  background: transparent;
   color: var(--accent);
   font-size: 0.88rem;
   font-weight: 700;
+  padding: 0;
 }
 
 .swal-patient-modal .swal2-html-container {
   margin: 12px 0 0;
+}
+
+.swal-patient-modal {
+  width: min(720px, calc(100vw - 32px));
 }
 
 .swal-form-grid {
@@ -399,39 +436,35 @@ button {
   gap: 8px;
 }
 
-.stack-form {
-  display: grid;
-  gap: 10px;
-}
-
-.stack-form input,
-.stack-form select,
-.stack-form textarea,
-.search-input {
-  width: 100%;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.66);
-  min-height: 48px;
-  padding: 12px 14px;
-  color: var(--text);
-}
-
-.stack-form textarea {
-  min-height: 88px;
-  resize: vertical;
-}
-
-.input-row {
+.swal-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
-.action-row {
+.swal-history-list {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
+  gap: 12px;
+  text-align: left;
+}
+
+.swal-history-entry {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.swal-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.swal-history-entry p,
+.swal-history-entry small {
+  display: block;
+  margin: 8px 0 0;
 }
 
 .status-chip {
@@ -441,6 +474,7 @@ button {
   padding: 0 10px;
   border-radius: 999px;
   font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .status-planned {
@@ -493,6 +527,13 @@ button {
   padding-top: 0;
 }
 
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
 .history-entry p,
 .history-entry small {
   margin: 8px 0 0;
@@ -533,16 +574,18 @@ button {
   }
 
   .topbar,
-  .section-heading {
+  .section-heading,
+  .patient-item-head,
+  .appointment-card-head,
+  .appointment-card-footer {
     align-items: start;
     flex-direction: column;
   }
 
   .overview,
   .week-grid,
-  .input-row,
-  .action-row,
-  .session-summary {
+  .session-summary,
+  .swal-row {
     grid-template-columns: 1fr;
   }
 
