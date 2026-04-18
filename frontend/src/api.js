@@ -1,9 +1,24 @@
 const API_URL = "http://127.0.0.1:8000";
+const SESSION_STORAGE_KEY = "turnos-historial-session-token";
+
+export function getStoredSessionToken() {
+  return window.localStorage.getItem(SESSION_STORAGE_KEY) || "";
+}
+
+export function setStoredSessionToken(token) {
+  window.localStorage.setItem(SESSION_STORAGE_KEY, token);
+}
+
+export function clearStoredSessionToken() {
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+}
 
 async function request(path, options = {}) {
+  const sessionToken = getStoredSessionToken();
   const response = await fetch(`${API_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      ...(sessionToken ? { "x-session-token": sessionToken } : {}),
       ...(options.headers ?? {}),
     },
     ...options,
@@ -23,6 +38,37 @@ async function request(path, options = {}) {
 
 export function fetchDashboard() {
   return request("/dashboard");
+}
+
+export function fetchAuthStatus() {
+  return request("/auth/status");
+}
+
+export function setupAuth(payload) {
+  return request("/auth/setup", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function login(payload) {
+  return request("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function logout() {
+  return request("/auth/logout", {
+    method: "POST",
+  });
+}
+
+export function recoverAccess(payload) {
+  return request("/auth/recover", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function fetchPatients(search = "") {

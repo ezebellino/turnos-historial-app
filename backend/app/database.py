@@ -26,6 +26,9 @@ def init_db():
             connection.execute(
                 text("ALTER TABLE patients ADD COLUMN prescribed_sessions INTEGER NOT NULL DEFAULT 0")
             )
+        table_names = set(inspector.get_table_names())
+        if "users" not in table_names:
+            Base.metadata.create_all(bind=engine)
 
 
 def get_db():

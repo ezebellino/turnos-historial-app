@@ -75,3 +75,34 @@ class DashboardSummary(BaseModel):
     upcoming_appointments: int
     completed_sessions: int
     today_label: str
+
+
+class AuthStatus(BaseModel):
+    configured: bool
+    authenticated: bool
+    username: str | None = None
+    full_name: str | None = None
+
+
+class SetupRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=60)
+    full_name: str = Field(min_length=2, max_length=120)
+    password: str = Field(min_length=4, max_length=120)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=60)
+    password: str = Field(min_length=4, max_length=120)
+
+
+class RecoverRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=60)
+    recovery_code: str = Field(min_length=6, max_length=64)
+    new_password: str = Field(min_length=4, max_length=120)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    username: str
+    full_name: str
+    recovery_code: str | None = None

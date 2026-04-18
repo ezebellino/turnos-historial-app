@@ -1,20 +1,28 @@
 from datetime import date, datetime, time, timedelta
+import hashlib
+import hmac
+import secrets
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from .database import get_db, init_db
-from .models import Appointment, Patient
+from .models import Appointment, Patient, User
 from .schemas import (
+    AuthResponse,
+    AuthStatus,
     AppointmentCreate,
     AppointmentRead,
     AppointmentUpdate,
     DashboardSummary,
+    LoginRequest,
     PatientCreate,
     PatientRead,
     PatientUpdate,
+    RecoverRequest,
+    SetupRequest,
 )
 
 
@@ -33,6 +41,46 @@ app.add_middleware(
 
 WORK_START_HOUR = 8
 WORK_END_HOUR = 20
+SESSION_HEADER = "x-session-token"
+
+
+def hash_secret(value: str) -> str:
+    salt = secrets.token_hex(16)
+    derived = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt.encode("utf-8"), 100_000)
+    return f"{salt}${derived.hex()}"
+
+
+def verify_secret(value: str, stored_hash: str) -> bool:
+    try:
+        salt, expected = stored_hash.split("$", 1)
+    except ValueError:
+        return False
+    derived = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+    return hmac.compare_digest(derived, expected)
+
+
+def issue_session_token(user: User, db: Session) -> str:
+    token = secrets.token_urlsafe(32)
+    user.session_token_hash = hash_secret(token)
+    db.commit()
+    return token
+
+
+def get_single_user(db: Session) -> User | None:
+    return db.scalar(select(User).limit(1))
+
+
+def get_current_user(
+    session_token: str | None = Header(default=None, alias=SESSION_HEADER),
+    db: Session = Depends(get_db),
+):
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Sesion requerida.")
+
+    user = get_single_user(db)
+    if not user or not user.session_token_hash or not verify_secret(session_token, user.session_token_hash):
+        raise HTTPException(status_code=401, detail="Sesion invalida.")
+    return user
 
 
 def validate_business_rules(payload: AppointmentCreate, db: Session, appointment_id: int | None = None):
@@ -76,8 +124,85 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/auth/status", response_model=AuthStatus)
+def auth_status(
+    session_token: str | None = Header(default=None, alias=SESSION_HEADER),
+    db: Session = Depends(get_db),
+):
+    user = get_single_user(db)
+    if not user:
+        return AuthStatus(configured=False, authenticated=False)
+
+    authenticated = bool(
+        session_token and user.session_token_hash and verify_secret(session_token, user.session_token_hash)
+    )
+    return AuthStatus(
+        configured=True,
+        authenticated=authenticated,
+        username=user.username if authenticated else None,
+        full_name=user.full_name if authenticated else None,
+    )
+
+
+@app.post("/auth/setup", response_model=AuthResponse, status_code=201)
+def auth_setup(payload: SetupRequest, db: Session = Depends(get_db)):
+    if get_single_user(db):
+        raise HTTPException(status_code=400, detail="El usuario ya fue configurado.")
+
+    recovery_code = secrets.token_hex(4).upper()
+    user = User(
+        username=payload.username.strip().lower(),
+        full_name=payload.full_name.strip(),
+        password_hash=hash_secret(payload.password),
+        recovery_code_hash=hash_secret(recovery_code),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = issue_session_token(user, db)
+    return AuthResponse(
+        token=token,
+        username=user.username,
+        full_name=user.full_name,
+        recovery_code=recovery_code,
+    )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def auth_login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = get_single_user(db)
+    if not user:
+        raise HTTPException(status_code=400, detail="Primero debes configurar el usuario.")
+
+    if user.username != payload.username.strip().lower() or not verify_secret(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Credenciales invalidas.")
+
+    token = issue_session_token(user, db)
+    return AuthResponse(token=token, username=user.username, full_name=user.full_name)
+
+
+@app.post("/auth/logout", status_code=204)
+def auth_logout(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    current_user.session_token_hash = None
+    db.commit()
+
+
+@app.post("/auth/recover", response_model=AuthResponse)
+def auth_recover(payload: RecoverRequest, db: Session = Depends(get_db)):
+    user = get_single_user(db)
+    if not user or user.username != payload.username.strip().lower():
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    if not verify_secret(payload.recovery_code.strip().upper(), user.recovery_code_hash):
+        raise HTTPException(status_code=401, detail="Codigo de recuperacion invalido.")
+
+    user.password_hash = hash_secret(payload.new_password)
+    token = issue_session_token(user, db)
+    return AuthResponse(token=token, username=user.username, full_name=user.full_name)
+
+
 @app.get("/dashboard", response_model=DashboardSummary)
-def dashboard(db: Session = Depends(get_db)):
+def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     today = date.today()
     upcoming = db.scalar(
         select(func.count()).select_from(Appointment).where(
@@ -102,6 +227,7 @@ def dashboard(db: Session = Depends(get_db)):
 def list_patients(
     search: str | None = Query(default=None, min_length=1),
     db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
     query = select(Patient).options(joinedload(Patient.appointments)).order_by(Patient.full_name.asc())
     if search:
@@ -110,7 +236,7 @@ def list_patients(
 
 
 @app.post("/patients", response_model=PatientRead, status_code=201)
-def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
+def create_patient(payload: PatientCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     patient = Patient(**payload.model_dump())
     db.add(patient)
     db.commit()
@@ -123,7 +249,12 @@ def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
 
 
 @app.patch("/patients/{patient_id}", response_model=PatientRead)
-def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depends(get_db)):
+def update_patient(
+    patient_id: int,
+    payload: PatientUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     patient = db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Paciente no encontrado.")
@@ -143,7 +274,7 @@ def update_patient(patient_id: int, payload: PatientUpdate, db: Session = Depend
 
 
 @app.get("/patients/{patient_id}/history", response_model=list[AppointmentRead])
-def patient_history(patient_id: int, db: Session = Depends(get_db)):
+def patient_history(patient_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     patient = db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Paciente no encontrado.")
@@ -162,6 +293,7 @@ def list_appointments(
     start: date | None = None,
     end: date | None = None,
     db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ):
     if start is None:
         today = date.today()
@@ -179,7 +311,11 @@ def list_appointments(
 
 
 @app.post("/appointments", response_model=AppointmentRead, status_code=201)
-def create_appointment(payload: AppointmentCreate, db: Session = Depends(get_db)):
+def create_appointment(
+    payload: AppointmentCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     patient = db.get(Patient, payload.patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Paciente no encontrado.")
@@ -200,7 +336,12 @@ def create_appointment(payload: AppointmentCreate, db: Session = Depends(get_db)
 
 
 @app.patch("/appointments/{appointment_id}", response_model=AppointmentRead)
-def update_appointment(appointment_id: int, payload: AppointmentUpdate, db: Session = Depends(get_db)):
+def update_appointment(
+    appointment_id: int,
+    payload: AppointmentUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     appointment = db.get(Appointment, appointment_id)
     if not appointment:
         raise HTTPException(status_code=404, detail="Turno no encontrado.")
@@ -231,7 +372,11 @@ def update_appointment(appointment_id: int, payload: AppointmentUpdate, db: Sess
 
 
 @app.delete("/appointments/{appointment_id}", status_code=204)
-def delete_appointment(appointment_id: int, db: Session = Depends(get_db)):
+def delete_appointment(
+    appointment_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     appointment = db.get(Appointment, appointment_id)
     if not appointment:
         raise HTTPException(status_code=404, detail="Turno no encontrado.")

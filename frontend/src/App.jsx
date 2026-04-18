@@ -1,13 +1,21 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import {
+  clearStoredSessionToken,
   createAppointment,
   createPatient,
   deleteAppointment,
   fetchAppointments,
+  fetchAuthStatus,
   fetchDashboard,
   fetchPatientHistory,
   fetchPatients,
+  getStoredSessionToken,
+  login,
+  logout,
+  recoverAccess,
+  setStoredSessionToken,
+  setupAuth,
   updateAppointment,
   updatePatient,
 } from "./api";
@@ -216,7 +224,141 @@ function readAppointmentFormValues() {
   return payload;
 }
 
-export default function App() {
+function LoginScreen({
+  mode,
+  loginForm,
+  setupForm,
+  recoverForm,
+  setMode,
+  setLoginForm,
+  setSetupForm,
+  setRecoverForm,
+  onLogin,
+  onSetup,
+  onRecover,
+  busy,
+  errorMessage,
+}) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <p className="eyebrow">Turnos Historial App</p>
+        <h1>{mode === "setup" ? "Configurar acceso" : mode === "recover" ? "Recuperar acceso" : "Ingresar"}</h1>
+        <p className="auth-copy">
+          {mode === "setup"
+            ? "Crea el usuario local de esta PC. Despues podras entrar con username y contraseña."
+            : mode === "recover"
+              ? "Usa tu codigo de recuperacion para definir una nueva contraseña."
+              : "Ingresa con tu username y contraseña para abrir la agenda."}
+        </p>
+
+        {errorMessage ? <div className="error-banner auth-error">{errorMessage}</div> : null}
+
+        {mode === "setup" ? (
+          <form className="auth-form" onSubmit={onSetup}>
+            <input
+              required
+              placeholder="Nombre completo"
+              value={setupForm.full_name}
+              onChange={(event) => setSetupForm((current) => ({ ...current, full_name: event.target.value }))}
+            />
+            <input
+              required
+              placeholder="Username"
+              value={setupForm.username}
+              onChange={(event) => setSetupForm((current) => ({ ...current, username: event.target.value }))}
+            />
+            <input
+              required
+              type="password"
+              placeholder="Contraseña"
+              value={setupForm.password}
+              onChange={(event) => setSetupForm((current) => ({ ...current, password: event.target.value }))}
+            />
+            <input
+              placeholder="Celular para enviarte el codigo"
+              value={setupForm.phone}
+              onChange={(event) => setSetupForm((current) => ({ ...current, phone: event.target.value }))}
+            />
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Guardando..." : "Crear acceso"}
+            </button>
+          </form>
+        ) : null}
+
+        {mode === "login" ? (
+          <form className="auth-form" onSubmit={onLogin}>
+            <input
+              required
+              placeholder="Username"
+              value={loginForm.username}
+              onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))}
+            />
+            <input
+              required
+              type="password"
+              placeholder="Contraseña"
+              value={loginForm.password}
+              onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+            />
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Ingresando..." : "Ingresar"}
+            </button>
+          </form>
+        ) : null}
+
+        {mode === "recover" ? (
+          <form className="auth-form" onSubmit={onRecover}>
+            <input
+              required
+              placeholder="Username"
+              value={recoverForm.username}
+              onChange={(event) => setRecoverForm((current) => ({ ...current, username: event.target.value }))}
+            />
+            <input
+              required
+              placeholder="Codigo de recuperacion"
+              value={recoverForm.recovery_code}
+              onChange={(event) =>
+                setRecoverForm((current) => ({ ...current, recovery_code: event.target.value.toUpperCase() }))
+              }
+            />
+            <input
+              required
+              type="password"
+              placeholder="Nueva contraseña"
+              value={recoverForm.new_password}
+              onChange={(event) => setRecoverForm((current) => ({ ...current, new_password: event.target.value }))}
+            />
+            <button className="primary-button" type="submit" disabled={busy}>
+              {busy ? "Guardando..." : "Actualizar contraseña"}
+            </button>
+          </form>
+        ) : null}
+
+        <div className="auth-links">
+          {mode !== "login" ? (
+            <button type="button" className="text-button" onClick={() => setMode("login")}>
+              Ya tengo usuario
+            </button>
+          ) : null}
+          {mode !== "setup" ? (
+            <button type="button" className="text-button" onClick={() => setMode("setup")}>
+              Configurar usuario
+            </button>
+          ) : null}
+          {mode !== "recover" ? (
+            <button type="button" className="text-button" onClick={() => setMode("recover")}>
+              Recuperar acceso
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SchedulerApp({ authUser, onLogout }) {
   const [weekAnchor, setWeekAnchor] = useState(new Date());
   const [dashboard, setDashboard] = useState(null);
   const [patients, setPatients] = useState([]);
@@ -235,7 +377,7 @@ export default function App() {
 
   useEffect(() => {
     loadDashboard();
-    loadTodayAppointments();
+    loadTodayAppointments(true);
   }, []);
 
   useEffect(() => {
@@ -265,12 +407,14 @@ export default function App() {
     }
   }
 
-  async function loadTodayAppointments() {
+  async function loadTodayAppointments(autoOpen = false) {
     try {
       const today = toDateInputValue(new Date());
       const data = await fetchAppointments(today, today);
       setTodayAppointments(data);
-      setShowReminders(data.length > 0);
+      if (autoOpen && data.length > 0) {
+        setShowReminders(true);
+      }
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -307,7 +451,7 @@ export default function App() {
     await Promise.all([
       loadAppointments(weekStart, weekEnd),
       loadDashboard(),
-      loadTodayAppointments(),
+      loadTodayAppointments(false),
       loadPatients(patientSearch),
       patientId ? fetchPatientHistory(patientId).then(setHistory) : Promise.resolve(),
     ]);
@@ -637,6 +781,7 @@ export default function App() {
         <div>
           <p className="eyebrow">Turnos Historial App</p>
           <h1>Agenda y pacientes</h1>
+          <p className="session-user">{authUser.full_name}</p>
         </div>
         <div className="topbar-actions">
           <button type="button" className="primary-button" onClick={openNewPatientModal}>
@@ -656,6 +801,9 @@ export default function App() {
           </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(1)}>
             Semana siguiente
+          </button>
+          <button type="button" className="ghost-button" onClick={onLogout}>
+            Salir
           </button>
         </div>
       </header>
@@ -862,4 +1010,190 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+export default function App() {
+  const [booting, setBooting] = useState(true);
+  const [authStatus, setAuthStatus] = useState({
+    configured: false,
+    authenticated: false,
+    username: null,
+    full_name: null,
+  });
+  const [mode, setMode] = useState("login");
+  const [busy, setBusy] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [setupForm, setSetupForm] = useState({ username: "", full_name: "", password: "", phone: "" });
+  const [recoverForm, setRecoverForm] = useState({ username: "", recovery_code: "", new_password: "" });
+
+  useEffect(() => {
+    loadAuthStatus();
+  }, []);
+
+  async function loadAuthStatus() {
+    setBooting(true);
+    try {
+      const status = await fetchAuthStatus();
+      setAuthStatus(status);
+      setMode(status.configured ? "login" : "setup");
+    } catch {
+      clearStoredSessionToken();
+      setAuthStatus({
+        configured: false,
+        authenticated: false,
+        username: null,
+        full_name: null,
+      });
+      setMode("setup");
+    } finally {
+      setBooting(false);
+    }
+  }
+
+  async function handleSetup(event) {
+    event.preventDefault();
+    setBusy(true);
+    setErrorMessage("");
+
+    try {
+      const payload = {
+        username: setupForm.username.trim().toLowerCase(),
+        full_name: setupForm.full_name.trim(),
+        password: setupForm.password,
+      };
+      const response = await setupAuth(payload);
+      setStoredSessionToken(response.token);
+      setAuthStatus({
+        configured: true,
+        authenticated: true,
+        username: response.username,
+        full_name: response.full_name,
+      });
+
+      const message = encodeURIComponent(
+        `Tu codigo de recuperacion de Turnos Historial App es: ${response.recovery_code}`,
+      );
+      const whatsappPhone = sanitizeWhatsappNumber(setupForm.phone);
+
+      await Swal.fire({
+        title: "Codigo de recuperacion",
+        html: `
+          <div class="recovery-box">
+            <strong>${response.recovery_code}</strong>
+            <p>Guardalo o envialo a tu celular. Con este codigo podras crear una nueva contraseña.</p>
+          </div>
+        `,
+        showCancelButton: Boolean(whatsappPhone),
+        confirmButtonText: "Cerrar",
+        cancelButtonText: "Enviar a WhatsApp",
+        reverseButtons: true,
+      }).then((result) => {
+        if (result.dismiss === Swal.DismissReason.cancel && whatsappPhone) {
+          window.open(`https://wa.me/${whatsappPhone}?text=${message}`, "_blank", "noopener,noreferrer");
+        }
+      });
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    setBusy(true);
+    setErrorMessage("");
+
+    try {
+      const response = await login({
+        username: loginForm.username.trim().toLowerCase(),
+        password: loginForm.password,
+      });
+      setStoredSessionToken(response.token);
+      setAuthStatus({
+        configured: true,
+        authenticated: true,
+        username: response.username,
+        full_name: response.full_name,
+      });
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRecover(event) {
+    event.preventDefault();
+    setBusy(true);
+    setErrorMessage("");
+
+    try {
+      const response = await recoverAccess({
+        username: recoverForm.username.trim().toLowerCase(),
+        recovery_code: recoverForm.recovery_code.trim().toUpperCase(),
+        new_password: recoverForm.new_password,
+      });
+      setStoredSessionToken(response.token);
+      setAuthStatus({
+        configured: true,
+        authenticated: true,
+        username: response.username,
+        full_name: response.full_name,
+      });
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logout();
+    } catch {
+      // Ignore logout failures and clear local session anyway.
+    }
+    clearStoredSessionToken();
+    setAuthStatus((current) => ({
+      ...current,
+      authenticated: false,
+    }));
+    setMode("login");
+    setLoginForm({ username: authStatus.username || "", password: "" });
+  }
+
+  if (booting) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <p className="eyebrow">Turnos Historial App</p>
+          <h1>Abriendo sistema</h1>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authStatus.authenticated) {
+    return (
+      <LoginScreen
+        mode={mode}
+        loginForm={loginForm}
+        setupForm={setupForm}
+        recoverForm={recoverForm}
+        setMode={setMode}
+        setLoginForm={setLoginForm}
+        setSetupForm={setSetupForm}
+        setRecoverForm={setRecoverForm}
+        onLogin={handleLogin}
+        onSetup={handleSetup}
+        onRecover={handleRecover}
+        busy={busy}
+        errorMessage={errorMessage}
+      />
+    );
+  }
+
+  return <SchedulerApp authUser={authStatus} onLogout={handleLogout} />;
 }
