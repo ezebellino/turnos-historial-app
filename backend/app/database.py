@@ -1,8 +1,13 @@
+import os
+from pathlib import Path
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
-DATABASE_URL = "sqlite:///./turnos_historial.db"
+DATA_DIR = Path(os.getenv("TURNOS_DATA_DIR", ".")).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATABASE_URL = f"sqlite:///{(DATA_DIR / 'turnos_historial.db').as_posix()}"
 
 engine = create_engine(
     DATABASE_URL,
@@ -21,14 +26,21 @@ def init_db():
 
     with engine.begin() as connection:
         inspector = inspect(connection)
+        table_names = set(inspector.get_table_names())
+
         patient_columns = {column["name"] for column in inspector.get_columns("patients")}
         if "prescribed_sessions" not in patient_columns:
             connection.execute(
                 text("ALTER TABLE patients ADD COLUMN prescribed_sessions INTEGER NOT NULL DEFAULT 0")
             )
-        table_names = set(inspector.get_table_names())
+        if "photo_filename" not in patient_columns:
+            connection.execute(text("ALTER TABLE patients ADD COLUMN photo_filename VARCHAR(255)"))
         if "users" not in table_names:
             Base.metadata.create_all(bind=engine)
+        else:
+            user_columns = {column["name"] for column in inspector.get_columns("users")}
+            if "phone" not in user_columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
 
 
 def get_db():

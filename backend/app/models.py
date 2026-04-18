@@ -12,6 +12,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(60), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(40), default=None)
     password_hash: Mapped[str] = mapped_column(String(256))
     recovery_code_hash: Mapped[str] = mapped_column(String(256))
     session_token_hash: Mapped[str | None] = mapped_column(String(256), default=None)
@@ -23,6 +24,7 @@ class Patient(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120), index=True)
+    photo_filename: Mapped[str | None] = mapped_column(String(255), default=None)
     phone: Mapped[str | None] = mapped_column(String(40), default=None)
     email: Mapped[str | None] = mapped_column(String(120), default=None)
     diagnosis: Mapped[str | None] = mapped_column(String(160), default=None)
@@ -43,6 +45,12 @@ class Patient(Base):
     @property
     def remaining_sessions(self) -> int:
         return max(self.prescribed_sessions - self.completed_sessions, 0)
+
+    @property
+    def photo_url(self) -> str | None:
+        if not self.photo_filename:
+            return None
+        return f"/patient-photos/{self.photo_filename}"
 
 
 class Appointment(Base):

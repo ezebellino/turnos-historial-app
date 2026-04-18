@@ -1,4 +1,4 @@
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const SESSION_STORAGE_KEY = "turnos-historial-session-token";
 
 export function getStoredSessionToken() {
@@ -13,11 +13,22 @@ export function clearStoredSessionToken() {
   window.localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
+export function resolveApiUrl(path) {
+  if (!path) {
+    return "";
+  }
+  if (/^https?:\/\//.test(path)) {
+    return path;
+  }
+  return `${API_URL}${path}`;
+}
+
 async function request(path, options = {}) {
   const sessionToken = getStoredSessionToken();
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_URL}${path}`, {
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(sessionToken ? { "x-session-token": sessionToken } : {}),
       ...(options.headers ?? {}),
     },
@@ -26,7 +37,14 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || "No se pudo completar la solicitud.");
+    const detail = payload.detail;
+    if (Array.isArray(detail)) {
+      const message = detail
+        .map((entry) => `${(entry.loc || []).join(" / ")}: ${entry.msg}`)
+        .join(" | ");
+      throw new Error(message || "No se pudo completar la solicitud.");
+    }
+    throw new Error(detail || "No se pudo completar la solicitud.");
   }
 
   if (response.status === 204) {
@@ -71,6 +89,13 @@ export function recoverAccess(payload) {
   });
 }
 
+export function requestRecoveryCode(payload) {
+  return request("/auth/recovery-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchPatients(search = "") {
   const query = search ? `?search=${encodeURIComponent(search)}` : "";
   return request(`/patients${query}`);
@@ -87,6 +112,21 @@ export function updatePatient(id, payload) {
   return request(`/patients/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function uploadPatientPhoto(id, file) {
+  const formData = new FormData();
+  formData.append("photo", file);
+  return request(`/patients/${id}/photo`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function deletePatientPhoto(id) {
+  return request(`/patients/${id}/photo`, {
+    method: "DELETE",
   });
 }
 

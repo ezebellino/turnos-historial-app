@@ -1,0 +1,39 @@
+{
+  "name": "turnos-historial-app-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "frontend:dev": "npm --prefix frontend run dev -- --host 127.0.0.1",
+    "frontend:build": "npm --prefix frontend run build",
+    "backend:dev": "node desktop/backend-dev.cjs",
+    "backend:build": "node desktop/backend-build.cjs",
+    "desktop:dev": "node desktop/dev.cjs",
+    "desktop:portable": "npm run frontend:build && npm run backend:build && electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^36.3.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.ezebellino.turnoshistorial",
+    "productName": "Turnos Historial App",
+    "files": [
+      "desktop/**/*",
+      "frontend/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/turnos-historial-backend.exe",
+        "to": "backend/turnos-historial-backend.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "artifactName": "Turnos-Historial-App-Portable.${ext}"
+    }
+  }
+}

@@ -1,14 +1,17 @@
 from datetime import date, datetime, time, timedelta
 import hashlib
 import hmac
+from pathlib import Path
+import shutil
 import secrets
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from .database import get_db, init_db
+from .database import DATA_DIR, get_db, init_db
 from .models import Appointment, Patient, User
 from .schemas import (
     AuthResponse,
@@ -22,6 +25,8 @@ from .schemas import (
     PatientRead,
     PatientUpdate,
     RecoverRequest,
+    RecoveryCodeRequest,
+    RecoveryCodeResponse,
     SetupRequest,
 )
 
@@ -32,7 +37,7 @@ app = FastAPI(title="Turnos Historial App")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "null"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,6 +47,15 @@ app.add_middleware(
 WORK_START_HOUR = 8
 WORK_END_HOUR = 20
 SESSION_HEADER = "x-session-token"
+PHOTO_MAX_BYTES = 5 * 1024 * 1024
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+PATIENT_PHOTOS_DIR = DATA_DIR / "patient_photos"
+PATIENT_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/patient-photos", StaticFiles(directory=PATIENT_PHOTOS_DIR), name="patient-photos")
 
 
 def hash_secret(value: str) -> str:
@@ -64,6 +78,13 @@ def issue_session_token(user: User, db: Session) -> str:
     user.session_token_hash = hash_secret(token)
     db.commit()
     return token
+
+
+def issue_recovery_code(user: User, db: Session) -> str:
+    recovery_code = secrets.token_hex(4).upper()
+    user.recovery_code_hash = hash_secret(recovery_code)
+    db.commit()
+    return recovery_code
 
 
 def get_single_user(db: Session) -> User | None:
@@ -95,6 +116,7 @@ def validate_business_rules(payload: AppointmentCreate, db: Session, appointment
         raise HTTPException(status_code=400, detail="El horario debe estar entre las 08:00 y las 20:00.")
 
     overlapping_query = select(Appointment).where(
+        Appointment.patient_id == payload.patient_id,
         Appointment.date == payload.date,
         Appointment.time == payload.time,
         Appointment.status != "cancelled",
@@ -104,7 +126,10 @@ def validate_business_rules(payload: AppointmentCreate, db: Session, appointment
 
     existing = db.scalar(overlapping_query)
     if existing:
-        raise HTTPException(status_code=400, detail="Ya existe un turno en ese horario.")
+        raise HTTPException(
+            status_code=400,
+            detail="Ese paciente ya tiene un turno en la misma fecha y horario.",
+        )
 
 
 def read_appointment_or_404(appointment_id: int, db: Session):
@@ -117,6 +142,48 @@ def read_appointment_or_404(appointment_id: int, db: Session):
     if not appointment:
         raise HTTPException(status_code=404, detail="Turno no encontrado.")
     return appointment
+
+
+def read_patient_or_404(patient_id: int, db: Session):
+    statement = (
+        select(Patient)
+        .options(joinedload(Patient.appointments))
+        .where(Patient.id == patient_id)
+    )
+    patient = db.scalar(statement)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+    return patient
+
+
+def delete_patient_photo_file(filename: str | None):
+    if not filename:
+        return
+
+    file_path = PATIENT_PHOTOS_DIR / Path(filename).name
+    if file_path.exists():
+        file_path.unlink()
+
+
+def persist_patient_photo(patient: Patient, upload: UploadFile, db: Session):
+    if upload.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="La foto debe ser JPG, PNG o WEBP.")
+
+    extension = ALLOWED_IMAGE_TYPES[upload.content_type]
+    filename = f"patient-{patient.id}-{secrets.token_hex(8)}{extension}"
+    target_path = PATIENT_PHOTOS_DIR / filename
+
+    with target_path.open("wb") as buffer:
+        shutil.copyfileobj(upload.file, buffer)
+
+    if target_path.stat().st_size > PHOTO_MAX_BYTES:
+        target_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="La foto no puede superar los 5 MB.")
+
+    delete_patient_photo_file(patient.photo_filename)
+    patient.photo_filename = filename
+    db.commit()
+    return read_patient_or_404(patient.id, db)
 
 
 @app.get("/health")
@@ -141,6 +208,7 @@ def auth_status(
         authenticated=authenticated,
         username=user.username if authenticated else None,
         full_name=user.full_name if authenticated else None,
+        has_recovery_phone=bool(user.phone),
     )
 
 
@@ -153,6 +221,7 @@ def auth_setup(payload: SetupRequest, db: Session = Depends(get_db)):
     user = User(
         username=payload.username.strip().lower(),
         full_name=payload.full_name.strip(),
+        phone=payload.phone.strip() if payload.phone else None,
         password_hash=hash_secret(payload.password),
         recovery_code_hash=hash_secret(recovery_code),
     )
@@ -185,6 +254,26 @@ def auth_login(payload: LoginRequest, db: Session = Depends(get_db)):
 def auth_logout(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     current_user.session_token_hash = None
     db.commit()
+
+
+@app.post("/auth/recovery-code", response_model=RecoveryCodeResponse)
+def auth_recovery_code(payload: RecoveryCodeRequest, db: Session = Depends(get_db)):
+    user = get_single_user(db)
+    if not user or user.username != payload.username.strip().lower():
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+    phone = payload.phone.strip() if payload.phone else user.phone
+    if not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Carga un celular para enviarte el codigo por WhatsApp.",
+        )
+
+    if payload.phone:
+        user.phone = phone
+
+    recovery_code = issue_recovery_code(user, db)
+    return RecoveryCodeResponse(recovery_code=recovery_code, phone=phone)
 
 
 @app.post("/auth/recover", response_model=AuthResponse)
@@ -271,6 +360,39 @@ def update_patient(
         .where(Patient.id == patient.id)
     )
     return db.scalar(statement)
+
+
+@app.post("/patients/{patient_id}/photo", response_model=PatientRead)
+def upload_patient_photo(
+    patient_id: int,
+    photo: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    patient = db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+
+    try:
+        return persist_patient_photo(patient, photo, db)
+    finally:
+        photo.file.close()
+
+
+@app.delete("/patients/{patient_id}/photo", response_model=PatientRead)
+def delete_patient_photo(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    patient = db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+
+    delete_patient_photo_file(patient.photo_filename)
+    patient.photo_filename = None
+    db.commit()
+    return read_patient_or_404(patient.id, db)
 
 
 @app.get("/patients/{patient_id}/history", response_model=list[AppointmentRead])

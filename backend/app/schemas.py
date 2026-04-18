@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date as dt_date, datetime as dt_datetime, time as dt_time
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -33,15 +33,16 @@ class PatientRead(PatientBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    created_at: datetime
+    created_at: dt_datetime
+    photo_url: str | None = None
     completed_sessions: int
     remaining_sessions: int
 
 
 class AppointmentBase(BaseModel):
     patient_id: int
-    date: date
-    time: time
+    date: dt_date
+    time: dt_time
     duration_minutes: int = Field(default=60, ge=30, le=120)
     status: AppointmentStatus = "scheduled"
     reason: str | None = Field(default=None, max_length=160)
@@ -54,8 +55,8 @@ class AppointmentCreate(AppointmentBase):
 
 class AppointmentUpdate(BaseModel):
     patient_id: Optional[int] = None
-    date: Optional[date] = None
-    time: Optional[time] = None
+    date: Optional[dt_date] = None
+    time: Optional[dt_time] = None
     duration_minutes: Optional[int] = Field(default=None, ge=30, le=120)
     status: Optional[AppointmentStatus] = None
     reason: Optional[str] = Field(default=None, max_length=160)
@@ -66,7 +67,7 @@ class AppointmentRead(AppointmentBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    created_at: datetime
+    created_at: dt_datetime
     patient: PatientRead
 
 
@@ -82,12 +83,14 @@ class AuthStatus(BaseModel):
     authenticated: bool
     username: str | None = None
     full_name: str | None = None
+    has_recovery_phone: bool = False
 
 
 class SetupRequest(BaseModel):
     username: str = Field(min_length=3, max_length=60)
     full_name: str = Field(min_length=2, max_length=120)
     password: str = Field(min_length=4, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
 
 
 class LoginRequest(BaseModel):
@@ -99,6 +102,16 @@ class RecoverRequest(BaseModel):
     username: str = Field(min_length=3, max_length=60)
     recovery_code: str = Field(min_length=6, max_length=64)
     new_password: str = Field(min_length=4, max_length=120)
+
+
+class RecoveryCodeRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=60)
+    phone: str | None = Field(default=None, max_length=40)
+
+
+class RecoveryCodeResponse(BaseModel):
+    recovery_code: str
+    phone: str
 
 
 class AuthResponse(BaseModel):

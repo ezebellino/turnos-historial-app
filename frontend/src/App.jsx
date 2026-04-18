@@ -4,6 +4,7 @@ import {
   clearStoredSessionToken,
   createAppointment,
   createPatient,
+  deletePatientPhoto,
   deleteAppointment,
   fetchAppointments,
   fetchAuthStatus,
@@ -14,8 +15,11 @@ import {
   login,
   logout,
   recoverAccess,
+  requestRecoveryCode,
+  resolveApiUrl,
   setStoredSessionToken,
   setupAuth,
+  uploadPatientPhoto,
   updateAppointment,
   updatePatient,
 } from "./api";
@@ -56,6 +60,19 @@ function getWeekRange(baseDate) {
   });
 }
 
+function getNextBusinessDate(baseDate = new Date()) {
+  const current = new Date(baseDate);
+  const weekday = current.getDay();
+
+  if (weekday === 6) {
+    current.setDate(current.getDate() + 2);
+  } else if (weekday === 0) {
+    current.setDate(current.getDate() + 1);
+  }
+
+  return current;
+}
+
 function toDateInputValue(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -74,6 +91,23 @@ function sanitizeWhatsappNumber(phone) {
 function buildWhatsappMessage(appointment) {
   const time = formatClock(appointment.date, appointment.time);
   return `Hola ${appointment.patient.full_name}, te recordamos tu turno de kinesiologia de hoy a las ${time}.`;
+}
+
+function buildRecoveryCodeMessage(code) {
+  return `Tu codigo de recuperacion de Turnos Historial App es: ${code}`;
+}
+
+function patientPhotoUrl(patient) {
+  return resolveApiUrl(patient?.photo_url);
+}
+
+function patientInitials(fullName) {
+  return (fullName || "")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((chunk) => chunk[0]?.toUpperCase())
+    .join("") || "?";
 }
 
 function validateAppointmentInput({ date, time }) {
@@ -97,6 +131,19 @@ function validateAppointmentInput({ date, time }) {
 function patientFormHtml(patient = {}) {
   return `
     <div class="swal-form-grid">
+      <div class="swal-photo-field">
+        ${
+          patient.photo_url
+            ? `<img src="${patientPhotoUrl(patient)}" alt="${patient.full_name || "Paciente"}" class="swal-photo-preview" />`
+            : '<div class="swal-photo-placeholder">Sin foto</div>'
+        }
+        <input id="swal-photo" class="swal2-file" type="file" accept="image/png,image/jpeg,image/webp" />
+        ${
+          patient.photo_url
+            ? '<label class="swal-photo-remove"><input id="swal-photo-remove" type="checkbox" /> Quitar foto actual</label>'
+            : ""
+        }
+      </div>
       <input id="swal-full-name" class="swal2-input" placeholder="Nombre y apellido" value="${patient.full_name || ""}" />
       <input id="swal-phone" class="swal2-input" placeholder="Telefono con codigo pais" value="${patient.phone || ""}" />
       <input id="swal-email" class="swal2-input" placeholder="Email" value="${patient.email || ""}" />
@@ -114,6 +161,8 @@ function readPatientFormValues() {
   const diagnosis = document.getElementById("swal-diagnosis")?.value.trim() || "";
   const notes = document.getElementById("swal-notes")?.value.trim() || "";
   const prescribedSessions = Number(document.getElementById("swal-sessions")?.value ?? 0);
+  const photoFile = document.getElementById("swal-photo")?.files?.[0] ?? null;
+  const removePhoto = Boolean(document.getElementById("swal-photo-remove")?.checked);
 
   if (!fullName) {
     Swal.showValidationMessage("El nombre es obligatorio.");
@@ -125,6 +174,17 @@ function readPatientFormValues() {
     return null;
   }
 
+  if (photoFile) {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(photoFile.type)) {
+      Swal.showValidationMessage("La foto debe ser JPG, PNG o WEBP.");
+      return null;
+    }
+    if (photoFile.size > 5 * 1024 * 1024) {
+      Swal.showValidationMessage("La foto no puede superar los 5 MB.");
+      return null;
+    }
+  }
+
   return {
     full_name: fullName,
     phone,
@@ -132,6 +192,8 @@ function readPatientFormValues() {
     diagnosis,
     notes,
     prescribed_sessions: prescribedSessions,
+    photo_file: photoFile,
+    remove_photo: removePhoto && !photoFile,
   };
 }
 
@@ -224,6 +286,47 @@ function readAppointmentFormValues() {
   return payload;
 }
 
+async function syncPatientPhoto(patientId, formValues) {
+  if (formValues.photo_file) {
+    return uploadPatientPhoto(patientId, formValues.photo_file);
+  }
+  if (formValues.remove_photo) {
+    return deletePatientPhoto(patientId);
+  }
+  return null;
+}
+
+function patientPayload(formValues) {
+  const { photo_file, remove_photo, ...payload } = formValues;
+  return payload;
+}
+
+function buildAppointmentUpdatePayload(appointment, formValues) {
+  const nextValues = {
+    patient_id: formValues.patient_id,
+    date: formValues.date,
+    time: formValues.time,
+    duration_minutes: formValues.duration_minutes,
+    status: formValues.status,
+    reason: formValues.reason || "",
+    evolution_note: formValues.evolution_note || "",
+  };
+
+  const currentValues = {
+    patient_id: appointment.patient.id,
+    date: appointment.date,
+    time: appointment.time.slice(0, 5),
+    duration_minutes: appointment.duration_minutes,
+    status: appointment.status,
+    reason: appointment.reason || "",
+    evolution_note: appointment.evolution_note || "",
+  };
+
+  return Object.fromEntries(
+    Object.entries(nextValues).filter(([key, value]) => value !== currentValues[key]),
+  );
+}
+
 function LoginScreen({
   mode,
   loginForm,
@@ -236,8 +339,10 @@ function LoginScreen({
   onLogin,
   onSetup,
   onRecover,
+  onSendRecoveryCode,
   busy,
   errorMessage,
+  hasRecoveryPhone,
 }) {
   return (
     <div className="auth-shell">
@@ -316,6 +421,11 @@ function LoginScreen({
               onChange={(event) => setRecoverForm((current) => ({ ...current, username: event.target.value }))}
             />
             <input
+              placeholder={hasRecoveryPhone ? "Celular guardado (opcional)" : "Celular para WhatsApp"}
+              value={recoverForm.phone}
+              onChange={(event) => setRecoverForm((current) => ({ ...current, phone: event.target.value }))}
+            />
+            <input
               required
               placeholder="Codigo de recuperacion"
               value={recoverForm.recovery_code}
@@ -330,9 +440,19 @@ function LoginScreen({
               value={recoverForm.new_password}
               onChange={(event) => setRecoverForm((current) => ({ ...current, new_password: event.target.value }))}
             />
-            <button className="primary-button" type="submit" disabled={busy}>
-              {busy ? "Guardando..." : "Actualizar contraseña"}
-            </button>
+            <p className="auth-note">
+              {hasRecoveryPhone
+                ? "Puedes pedir un nuevo codigo por WhatsApp o usar el que ya tenias."
+                : "Si tu celular no habia quedado guardado, cargalo aca y te enviamos un nuevo codigo."}
+            </p>
+            <div className="auth-form-actions">
+              <button className="ghost-button" type="button" onClick={onSendRecoveryCode} disabled={busy}>
+                {busy ? "Enviando..." : "Enviar codigo por WhatsApp"}
+              </button>
+              <button className="primary-button" type="submit" disabled={busy}>
+                {busy ? "Guardando..." : "Actualizar contraseña"}
+              </button>
+            </div>
           </form>
         ) : null}
 
@@ -348,7 +468,17 @@ function LoginScreen({
             </button>
           ) : null}
           {mode !== "recover" ? (
-            <button type="button" className="text-button" onClick={() => setMode("recover")}>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setMode("recover");
+                setRecoverForm((current) => ({
+                  ...current,
+                  username: loginForm.username || current.username,
+                }));
+              }}
+            >
               Recuperar acceso
             </button>
           ) : null}
@@ -484,7 +614,8 @@ function SchedulerApp({ authUser, onLogout }) {
     }
 
     try {
-      const created = await createPatient(formValues);
+      const created = await createPatient(patientPayload(formValues));
+      await syncPatientPhoto(created.id, formValues);
       setSelectedPatientId(created.id);
       await refreshAgendaAndHistory(created.id);
       await Swal.fire({
@@ -522,7 +653,8 @@ function SchedulerApp({ authUser, onLogout }) {
 
     setErrorMessage("");
     try {
-      await updatePatient(patient.id, formValues);
+      await updatePatient(patient.id, patientPayload(formValues));
+      await syncPatientPhoto(patient.id, formValues);
       setSelectedPatientId(patient.id);
       await refreshAgendaAndHistory(patient.id);
       await Swal.fire({
@@ -543,13 +675,14 @@ function SchedulerApp({ authUser, onLogout }) {
   }
 
   async function openNewAppointmentModal(defaultPatientId = selectedPatientId) {
+    const suggestedDate = toDateInputValue(getNextBusinessDate());
     const { value: formValues } = await Swal.fire({
       title: "Nuevo turno",
       html: appointmentFormHtml({
         patients,
         appointment: {
           patient_id: defaultPatientId ? String(defaultPatientId) : "",
-          date: weekStart,
+          date: suggestedDate,
           time: "08:00",
           status: "scheduled",
           reason: "",
@@ -658,7 +791,11 @@ function SchedulerApp({ authUser, onLogout }) {
     }
 
     try {
-      const updated = await updateAppointment(appointment.id, result.value);
+      const payload = buildAppointmentUpdatePayload(appointment, result.value);
+      if (Object.keys(payload).length === 0) {
+        return;
+      }
+      const updated = await updateAppointment(appointment.id, payload);
       setSelectedPatientId(updated.patient.id);
       await refreshAgendaAndHistory(updated.patient.id);
     } catch (error) {
@@ -927,6 +1064,13 @@ function SchedulerApp({ authUser, onLogout }) {
                   onClick={() => setSelectedPatientId(patient.id)}
                 >
                   <div className="patient-item-head">
+                    <div className="patient-avatar-wrap">
+                      {patient.photo_url ? (
+                        <img className="patient-avatar" src={patientPhotoUrl(patient)} alt={patient.full_name} />
+                      ) : (
+                        <div className="patient-avatar patient-avatar-fallback">{patientInitials(patient.full_name)}</div>
+                      )}
+                    </div>
                     <div>
                       <strong>{patient.full_name}</strong>
                       <span>{patient.diagnosis || "Sin diagnostico"}</span>
@@ -949,9 +1093,24 @@ function SchedulerApp({ authUser, onLogout }) {
 
           <section className="pane history-pane">
             <div className="section-heading">
-              <div>
+              <div className="history-heading">
+                {selectedPatient ? (
+                  selectedPatient.photo_url ? (
+                    <img
+                      className="patient-avatar patient-avatar-large"
+                      src={patientPhotoUrl(selectedPatient)}
+                      alt={selectedPatient.full_name}
+                    />
+                  ) : (
+                    <div className="patient-avatar patient-avatar-large patient-avatar-fallback">
+                      {patientInitials(selectedPatient.full_name)}
+                    </div>
+                  )
+                ) : null}
+                <div>
                 <p className="eyebrow">Historial</p>
                 <h2>{selectedPatient ? selectedPatient.full_name : "Sin seleccionar"}</h2>
+                </div>
               </div>
               {selectedPatient ? (
                 <button
@@ -1019,13 +1178,14 @@ export default function App() {
     authenticated: false,
     username: null,
     full_name: null,
+    has_recovery_phone: false,
   });
   const [mode, setMode] = useState("login");
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [setupForm, setSetupForm] = useState({ username: "", full_name: "", password: "", phone: "" });
-  const [recoverForm, setRecoverForm] = useState({ username: "", recovery_code: "", new_password: "" });
+  const [recoverForm, setRecoverForm] = useState({ username: "", phone: "", recovery_code: "", new_password: "" });
 
   useEffect(() => {
     loadAuthStatus();
@@ -1044,6 +1204,7 @@ export default function App() {
         authenticated: false,
         username: null,
         full_name: null,
+        has_recovery_phone: false,
       });
       setMode("setup");
     } finally {
@@ -1061,6 +1222,7 @@ export default function App() {
         username: setupForm.username.trim().toLowerCase(),
         full_name: setupForm.full_name.trim(),
         password: setupForm.password,
+        phone: setupForm.phone.trim(),
       };
       const response = await setupAuth(payload);
       setStoredSessionToken(response.token);
@@ -1069,11 +1231,10 @@ export default function App() {
         authenticated: true,
         username: response.username,
         full_name: response.full_name,
+        has_recovery_phone: Boolean(setupForm.phone.trim()),
       });
 
-      const message = encodeURIComponent(
-        `Tu codigo de recuperacion de Turnos Historial App es: ${response.recovery_code}`,
-      );
+      const message = encodeURIComponent(buildRecoveryCodeMessage(response.recovery_code));
       const whatsappPhone = sanitizeWhatsappNumber(setupForm.phone);
 
       await Swal.fire({
@@ -1116,6 +1277,7 @@ export default function App() {
         authenticated: true,
         username: response.username,
         full_name: response.full_name,
+        has_recovery_phone: authStatus.has_recovery_phone,
       });
     } catch (error) {
       setErrorMessage(error.message);
@@ -1141,6 +1303,59 @@ export default function App() {
         authenticated: true,
         username: response.username,
         full_name: response.full_name,
+        has_recovery_phone: authStatus.has_recovery_phone || Boolean(recoverForm.phone.trim()),
+      });
+    } catch (error) {
+      setErrorMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSendRecoveryCode() {
+    const username = recoverForm.username.trim().toLowerCase();
+    if (!username) {
+      setErrorMessage("Carga el username para enviarte el codigo.");
+      return;
+    }
+
+    setBusy(true);
+    setErrorMessage("");
+
+    try {
+      const response = await requestRecoveryCode({
+        username,
+        phone: recoverForm.phone.trim() || null,
+      });
+      const whatsappPhone = sanitizeWhatsappNumber(response.phone);
+
+      if (!whatsappPhone) {
+        throw new Error("No hay un telefono valido para WhatsApp.");
+      }
+
+      setRecoverForm((current) => ({
+        ...current,
+        username,
+        phone: response.phone,
+        recovery_code: response.recovery_code,
+      }));
+      setAuthStatus((current) => ({
+        ...current,
+        has_recovery_phone: true,
+      }));
+
+      const message = encodeURIComponent(buildRecoveryCodeMessage(response.recovery_code));
+      window.open(`https://wa.me/${whatsappPhone}?text=${message}`, "_blank", "noopener,noreferrer");
+
+      await Swal.fire({
+        title: "Codigo enviado",
+        html: `
+          <div class="recovery-box">
+            <strong>${response.recovery_code}</strong>
+            <p>Te abrimos WhatsApp con el mensaje listo. Si prefieres, puedes pegar este codigo manualmente.</p>
+          </div>
+        `,
+        confirmButtonText: "Seguir",
       });
     } catch (error) {
       setErrorMessage(error.message);
@@ -1189,8 +1404,10 @@ export default function App() {
         onLogin={handleLogin}
         onSetup={handleSetup}
         onRecover={handleRecover}
+        onSendRecoveryCode={handleSendRecoveryCode}
         busy={busy}
         errorMessage={errorMessage}
+        hasRecoveryPhone={authStatus.has_recovery_phone}
       />
     );
   }

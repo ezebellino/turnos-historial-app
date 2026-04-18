@@ -1,6 +1,11 @@
 node_modules/
 dist/
 build/
+desktop-dist/
+backend/dist/
+backend/build/
+.desktop-data/
+backend/patient_photos/
 .venv/
 __pycache__/
 *.pyc
@@ -9,4 +14,3 @@ __pycache__/
 *.db
 .env
 .DS_Store
-
