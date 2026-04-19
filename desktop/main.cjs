@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs");
-const { spawn } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const { app, BrowserWindow, dialog, shell } = require("electron");
 
 const BACKEND_URL = "http://127.0.0.1:8000/health";
@@ -8,12 +8,17 @@ const FRONTEND_DEV_URL = process.env.FRONTEND_DEV_URL || "http://127.0.0.1:5173"
 const APP_USER_MODEL_ID = "com.ezebellino.turnoshistorial";
 let backendProcess = null;
 let backendManagedByApp = false;
+let mainWindow = null;
+
+function resolvePortableExecutableDir() {
+  return process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath);
+}
 
 function resolvePortableDataDir() {
   if (!app.isPackaged) {
     return path.join(app.getAppPath(), ".desktop-data");
   }
-  return path.join(path.dirname(process.execPath), "TurnosHistorialData");
+  return path.join(resolvePortableExecutableDir(), "TurnosHistorialData");
 }
 
 function resolveBackendPython() {
@@ -134,16 +139,43 @@ function createWindow() {
 
   if (!app.isPackaged) {
     window.loadURL(FRONTEND_DEV_URL);
+    mainWindow = window;
     return;
   }
 
   window.loadFile(path.join(app.getAppPath(), "frontend", "dist", "index.html"));
+  mainWindow = window;
 }
 
 function stopBackend() {
-  if (backendManagedByApp && backendProcess && !backendProcess.killed) {
-    backendProcess.kill();
+  if (!backendManagedByApp || !backendProcess) {
+    return;
   }
+
+  const { pid } = backendProcess;
+  if (!pid) {
+    backendProcess = null;
+    return;
+  }
+
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } else {
+      backendProcess.kill("SIGKILL");
+    }
+  } catch {
+    try {
+      backendProcess.kill("SIGKILL");
+    } catch {
+      // Ignore shutdown errors if the backend is already gone.
+    }
+  }
+
+  backendProcess = null;
 }
 
 app.whenReady().then(async () => {
@@ -166,4 +198,12 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopBackend();
+});
+
+app.on("browser-window-created", (_, window) => {
+  window.on("closed", () => {
+    if (window === mainWindow) {
+      stopBackend();
+    }
+  });
 });
