@@ -1,23 +1,104 @@
 # Turnos Historial App
 
-Aplicacion simple para gestionar pacientes, turnos e historial de atencion para kinesiologia.
+Aplicacion local para gestionar pacientes, turnos e historial de atencion en kinesiologia.
+
+Pensada para una sola PC, con foco en:
+
+- agenda clara
+- historial clinico simple
+- control de sesiones
+- uso portable en Windows
 
 ## Stack
 
 - Frontend: React + Vite
 - Backend: FastAPI
 - Base de datos: SQLite
+- Escritorio portable: Electron + PyInstaller
+
+## Funciones principales
+
+- login local con `username` y contrasena
+- recuperacion de acceso con codigo
+- agenda por dia, semana y mes
+- calendario mensual con pacientes nuevos destacados
+- alta, edicion y eliminacion de pacientes
+- alta, edicion y eliminacion de turnos
+- multiples pacientes en el mismo horario
+- historial por paciente con ultimas sesiones y detalle clinico
+- fotos opcionales de pacientes
+- contador de sesiones realizadas y restantes
+- recordatorios por WhatsApp
+- modal de turnos del dia
+
+## Funciones clinicas nuevas
+
+La version actual incorpora automatizacion de tratamientos.
+
+### Planificacion automatica de sesiones
+
+Cada paciente puede tener:
+
+- cantidad total de sesiones
+- fecha de comienzo
+- horario preferido
+- dias fijos de atencion
+- mes de facturacion
+- valor por sesion
+
+Con esos datos, la app puede generar automaticamente los turnos futuros hasta completar el tratamiento.
+
+Ejemplo:
+
+- paciente con `10 sesiones`
+- `martes y jueves`
+- `16:00`
+
+La app distribuye ese patron automaticamente hasta completar el plan.
+
+### Reprogramacion manual
+
+Si una sesion puntual cambia:
+
+- el turno puede editarse manualmente
+- la reprogramacion no rompe el resto del esquema
+
+### Feriados locales
+
+Los feriados se cargan manualmente desde la app.
+
+Si un turno automatico cae en un feriado:
+
+- no se toma como sesion realizada
+- se mueve al siguiente dia valido segun el patron del paciente
+
+### Control mensual de nuevos pacientes
+
+La app controla automaticamente los pacientes que comienzan en el mes actual.
+
+- limite mensual configurado: `20 pacientes`
+- si se intenta cargar el paciente `21`, la app ofrece pasarlo al mes siguiente mediante confirmacion
+
+### Estimacion mensual de PAMI
+
+Por paciente se puede cargar:
+
+- valor por sesion
+- cantidad total de sesiones
+
+La app calcula el valor total proyectado del tratamiento y muestra un estimado mensual para control administrativo.
 
 ## Estructura
 
 - `frontend/`: interfaz principal
 - `backend/`: API y persistencia
+- `desktop/`: integracion Electron y build portable
 
-## Desarrollo
+## Desarrollo local
 
 ### Backend
 
-```bash
+```powershell
 cd backend
 py -3 -m venv .venv
 .venv\Scripts\activate
@@ -27,7 +108,7 @@ uvicorn app.main:app --reload
 
 ### Frontend
 
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
@@ -37,12 +118,12 @@ La API corre en `http://127.0.0.1:8000` y el frontend en `http://127.0.0.1:5173`
 
 ## Fotos de pacientes
 
-La app ahora permite cargar una foto opcional por paciente para reconocerlo visualmente.
+La foto del paciente es opcional.
 
-- Se guarda en la misma PC
-- No depende de internet
-- Queda asociada al paciente en la base SQLite
-- Los archivos se almacenan en la carpeta de datos local, dentro de `patient_photos/`
+- se guarda en la misma PC
+- no depende de internet
+- queda asociada al paciente
+- los archivos se almacenan dentro de `patient_photos/`
 
 Formatos admitidos:
 
@@ -50,98 +131,97 @@ Formatos admitidos:
 - PNG
 - WEBP
 
-Tamano maximo por foto:
+Tamano maximo:
 
 - 5 MB
 
 ## Escritorio portable
 
-Se agrego una base de escritorio con Electron para llevar la app en Windows.
+La app puede entregarse como ejecutable portable para Windows.
 
-### Modo escritorio en desarrollo
+### Ejecutar escritorio en desarrollo
 
-```bash
+```powershell
 npm install
 npm run desktop:dev
 ```
 
-Ese comando ahora:
-
-- levanta Vite automaticamente
-- abre Electron
-- usa el backend de escritorio
-
-Si existe `backend/.venv`, se usa ese Python de forma automatica.
-
 ### Generar portable para Windows
 
-```bash
-cd backend
-py -3 -m pip install -r requirements.txt
-cd ..
+Requisitos validados para esta build:
+
+- Node.js instalado
+- Python `3.10` disponible en Windows
+- dependencias del frontend instaladas
+
+Comando:
+
+```powershell
 npm install
 npm run desktop:portable
 ```
 
-El flujo hace:
+Ese flujo:
 
-- build del frontend
-- empaqueta FastAPI con PyInstaller
-- genera un `.exe` portable con Electron Builder en `dist/`
+- builda el frontend
+- empaqueta el backend
+- genera el portable final en `dist/`
 
-La base SQLite se guarda en una carpeta portable junto al ejecutable para poder moverla en pendrive.
+## Archivo a entregar
 
-## Entrega al usuario
-
-Archivo principal:
+El ejecutable correcto para entregar al cliente es:
 
 - `dist/Turnos-Historial-App-Portable.exe`
 
-Carpeta de datos creada automaticamente al abrir la app:
+Ese archivo fue validado con arranque real y backend interno respondiendo correctamente.
+
+## Datos del usuario
+
+Al abrir el portable se crea o reutiliza la carpeta:
 
 - `TurnosHistorialData/`
 
-Dentro de esa carpeta quedan guardados:
+Dentro quedan:
 
-- base de datos SQLite
+- base SQLite
 - fotos de pacientes
-- informacion local del sistema
+- datos locales de la aplicacion
 
-Recomendacion para entregar:
+## Actualizacion en una PC que ya tiene version vieja
 
-1. Copiar `Turnos-Historial-App-Portable.exe` a un pendrive.
-2. Si ya existen datos reales, copiar tambien la carpeta `TurnosHistorialData/`.
-3. En la PC del kinesiologo, abrir el `.exe` con doble click.
-4. Mantener siempre el `.exe` y `TurnosHistorialData` en la misma ubicacion.
+Si el cliente ya usa una version anterior:
+
+1. cerrar la app vieja
+2. reemplazar el `.exe` anterior por el nuevo `Turnos-Historial-App-Portable.exe`
+3. conservar la carpeta `TurnosHistorialData/`
+4. mantener el `.exe` y `TurnosHistorialData` en la misma ubicacion
+
+No borrar `TurnosHistorialData` si se quiere conservar:
+
+- pacientes
+- turnos
+- historial
+- fotos
 
 ## Uso rapido para el kinesiologo
 
 Primer ingreso:
 
-1. Abrir `Turnos-Historial-App-Portable.exe`.
-2. Completar `Nombre completo`, `Username`, `Contrasena` y celular.
-3. Guardar el codigo de recuperacion.
+1. abrir `Turnos-Historial-App-Portable.exe`
+2. completar `Nombre completo`, `Username`, `Contrasena` y celular
+3. crear el acceso local
 
 Uso diario:
 
-1. Ingresar con `username` y `contrasena`.
-2. Crear pacientes desde `Nuevo paciente`.
-3. Crear turnos desde `Nuevo turno`.
-4. Revisar `Turnos de hoy` para enviar recordatorios por WhatsApp.
-5. Editar pacientes o turnos tocando el registro correspondiente.
+1. ingresar con `username` y `contrasena`
+2. crear pacientes desde `Nuevo paciente`
+3. crear turnos desde `Nuevo turno`
+4. revisar `Turnos de hoy`
+5. usar la agenda semanal o mensual segun necesidad
+6. editar pacientes y turnos desde sus respectivas tarjetas o modales
 
-Funciones incluidas:
+## Respaldo recomendado
 
-- agenda semanal y vista por dia
-- historial por paciente
-- conteo de sesiones
-- fotos de pacientes
-- recordatorios por WhatsApp
-- edicion y eliminacion de turnos
-- eliminacion de pacientes
-
-## Recomendaciones de respaldo
-
-- Hacer copia periodica de la carpeta `TurnosHistorialData/`
-- Guardar una copia en otro pendrive o en una carpeta de respaldo
-- No borrar esa carpeta si se quiere conservar historial, fotos y agenda
+- hacer copia periodica de `TurnosHistorialData/`
+- guardar una copia en OneDrive, Google Drive o un pendrive aparte
+- no mover solo la base sin sus fotos si tambien se usan imagenes de pacientes
