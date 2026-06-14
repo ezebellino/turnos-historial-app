@@ -58,6 +58,23 @@ export function fetchDashboard() {
   return request("/dashboard");
 }
 
+export function fetchHolidays() {
+  return request("/holidays");
+}
+
+export function createHoliday(payload) {
+  return request("/holidays", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteHoliday(id) {
+  return request(`/holidays/${id}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchAuthStatus() {
   return request("/auth/status");
 }

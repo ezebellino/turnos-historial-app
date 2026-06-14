@@ -1,15 +1,18 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import {
+  createHoliday,
   clearStoredSessionToken,
   createAppointment,
   createPatient,
   deletePatient,
+  deleteHoliday,
   deletePatientPhoto,
   deleteAppointment,
   fetchAppointments,
   fetchAuthStatus,
   fetchDashboard,
+  fetchHolidays,
   fetchPatientHistory,
   fetchPatients,
   getStoredSessionToken,
@@ -49,6 +52,16 @@ const STATUS_CLASS = {
   cancelled: "status-cancelled",
 };
 
+const MONTH_NAMES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: "Lunes" },
+  { value: 1, label: "Martes" },
+  { value: 2, label: "Miercoles" },
+  { value: 3, label: "Jueves" },
+  { value: 4, label: "Viernes" },
+];
+const MONTHLY_PATIENT_LIMIT = 20;
+
 function getWeekRange(baseDate) {
   const current = new Date(baseDate);
   const day = current.getDay();
@@ -82,8 +95,64 @@ function toDateInputValue(date) {
   return `${year}-${month}-${day}`;
 }
 
+function toMonthInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function fromMonthInputValue(value) {
+  return value ? `${value}-01` : null;
+}
+
+function parseDateString(value) {
+  return new Date(`${value}T12:00:00`);
+}
+
+function getMonthRange(baseDate) {
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+  const end = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0);
+  return { start, end };
+}
+
+function getMonthGrid(baseDate) {
+  const { start, end } = getMonthRange(baseDate);
+  const firstCell = new Date(start);
+  const startOffset = firstCell.getDay() === 0 ? -6 : 1 - firstCell.getDay();
+  firstCell.setDate(firstCell.getDate() + startOffset);
+
+  return Array.from({ length: 35 }, (_, index) => {
+    const day = new Date(firstCell);
+    day.setDate(firstCell.getDate() + index);
+    return day;
+  });
+}
+
 function formatClock(dateString, timeString) {
   return timeFormatter.format(new Date(`${dateString}T${timeString}`));
+}
+
+function formatCurrency(amount) {
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    maximumFractionDigits: 0,
+  }).format(amount || 0);
+}
+
+function formatMonthLabel(date) {
+  return `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+function isSameMonth(dateString, monthDate) {
+  if (!dateString) {
+    return false;
+  }
+  const parsed = parseDateString(dateString);
+  return (
+    parsed.getFullYear() === monthDate.getFullYear() &&
+    parsed.getMonth() === monthDate.getMonth()
+  );
 }
 
 function sanitizeWhatsappNumber(phone) {
@@ -130,7 +199,17 @@ function validateAppointmentInput({ date, time }) {
   return null;
 }
 
+function selectedWeekdayValues(patient = {}) {
+  const values = Array.isArray(patient.preferred_weekdays)
+    ? patient.preferred_weekdays
+    : typeof patient.preferred_weekdays === "string"
+      ? patient.preferred_weekdays.split(",").filter(Boolean).map(Number)
+      : [];
+  return new Set(values);
+}
+
 function patientFormHtml(patient = {}) {
+  const selectedWeekdays = selectedWeekdayValues(patient);
   return `
     <div class="swal-form-grid">
       <div class="swal-photo-field">
@@ -151,6 +230,31 @@ function patientFormHtml(patient = {}) {
       <input id="swal-email" class="swal2-input" placeholder="Email" value="${patient.email || ""}" />
       <input id="swal-diagnosis" class="swal2-input" placeholder="Diagnostico" value="${patient.diagnosis || ""}" />
       <input id="swal-sessions" class="swal2-input" type="number" min="0" max="120" placeholder="Cantidad de sesiones" value="${patient.prescribed_sessions ?? 10}" />
+      <div class="swal-section-label">Plan terapeutico</div>
+      <div class="swal-row">
+        <input id="swal-start-date" class="swal2-input" type="date" value="${patient.treatment_start_date || toDateInputValue(getNextBusinessDate())}" />
+        <input id="swal-session-price" class="swal2-input" type="number" min="0" step="100" placeholder="Valor por paciente" value="${patient.session_price ?? 0}" />
+      </div>
+      <div class="swal-row">
+        <input id="swal-billing-month" class="swal2-input" type="month" value="${
+          patient.billing_month ? patient.billing_month.slice(0, 7) : toMonthInputValue(getNextBusinessDate())
+        }" />
+        <input id="swal-preferred-time" class="swal2-input" type="time" min="08:00" max="19:00" step="1800" value="${patient.preferred_time ? patient.preferred_time.slice(0, 5) : "08:00"}" />
+      </div>
+      <div class="weekday-picker">
+        ${WEEKDAY_OPTIONS.map(
+          (option) => `
+            <label class="weekday-chip">
+              <input type="checkbox" id="swal-weekday-${option.value}" ${selectedWeekdays.has(option.value) ? "checked" : ""} />
+              <span>${option.label}</span>
+            </label>
+          `,
+        ).join("")}
+      </div>
+      <label class="swal-photo-remove">
+        <input id="swal-auto-schedule" type="checkbox" ${patient.auto_schedule_enabled ? "checked" : ""} />
+        Generar y mantener cronograma automatico
+      </label>
       <textarea id="swal-notes" class="swal2-textarea" placeholder="Notas">${patient.notes || ""}</textarea>
     </div>
   `;
@@ -163,6 +267,14 @@ function readPatientFormValues() {
   const diagnosis = document.getElementById("swal-diagnosis")?.value.trim() || "";
   const notes = document.getElementById("swal-notes")?.value.trim() || "";
   const prescribedSessions = Number(document.getElementById("swal-sessions")?.value ?? 0);
+  const treatmentStartDate = document.getElementById("swal-start-date")?.value || null;
+  const billingMonth = fromMonthInputValue(document.getElementById("swal-billing-month")?.value || "");
+  const sessionPrice = Number(document.getElementById("swal-session-price")?.value ?? 0);
+  const preferredTime = document.getElementById("swal-preferred-time")?.value || null;
+  const preferredWeekdays = WEEKDAY_OPTIONS.filter((option) =>
+    document.getElementById(`swal-weekday-${option.value}`)?.checked,
+  ).map((option) => option.value);
+  const autoScheduleEnabled = Boolean(document.getElementById("swal-auto-schedule")?.checked);
   const photoFile = document.getElementById("swal-photo")?.files?.[0] ?? null;
   const removePhoto = Boolean(document.getElementById("swal-photo-remove")?.checked);
 
@@ -173,6 +285,16 @@ function readPatientFormValues() {
 
   if (Number.isNaN(prescribedSessions) || prescribedSessions < 0 || prescribedSessions > 120) {
     Swal.showValidationMessage("La cantidad de sesiones debe estar entre 0 y 120.");
+    return null;
+  }
+
+  if (Number.isNaN(sessionPrice) || sessionPrice < 0) {
+    Swal.showValidationMessage("El valor por paciente no puede ser negativo.");
+    return null;
+  }
+
+  if (autoScheduleEnabled && (!treatmentStartDate || !preferredTime || preferredWeekdays.length === 0)) {
+    Swal.showValidationMessage("Para automatizar el cronograma completa fecha de inicio, hora y al menos un dia fijo.");
     return null;
   }
 
@@ -194,6 +316,12 @@ function readPatientFormValues() {
     diagnosis,
     notes,
     prescribed_sessions: prescribedSessions,
+    treatment_start_date: treatmentStartDate,
+    billing_month: billingMonth,
+    session_price: sessionPrice,
+    preferred_time: preferredTime,
+    preferred_weekdays: preferredWeekdays,
+    auto_schedule_enabled: autoScheduleEnabled,
     photo_file: photoFile,
     remove_photo: removePhoto && !photoFile,
   };
@@ -501,6 +629,7 @@ function SchedulerApp({ authUser, onLogout }) {
   const [dashboard, setDashboard] = useState(null);
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [todayAppointments, setTodayAppointments] = useState([]);
   const [showReminders, setShowReminders] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
@@ -512,12 +641,17 @@ function SchedulerApp({ authUser, onLogout }) {
   const [selectedDayKey, setSelectedDayKey] = useState(toDateInputValue(getNextBusinessDate()));
 
   const weekDates = useMemo(() => getWeekRange(weekAnchor), [weekAnchor]);
+  const monthGrid = useMemo(() => getMonthGrid(weekAnchor), [weekAnchor]);
+  const monthRange = useMemo(() => getMonthRange(weekAnchor), [weekAnchor]);
   const weekStart = toDateInputValue(weekDates[0]);
   const weekEnd = toDateInputValue(weekDates[4]);
+  const rangeStart = toDateInputValue(monthRange.start);
+  const rangeEnd = toDateInputValue(monthRange.end);
 
   useEffect(() => {
     loadDashboard();
     loadTodayAppointments(true);
+    loadHolidays();
   }, []);
 
   useEffect(() => {
@@ -525,8 +659,8 @@ function SchedulerApp({ authUser, onLogout }) {
   }, [patientSearch]);
 
   useEffect(() => {
-    loadAppointments(weekStart, weekEnd);
-  }, [weekStart, weekEnd]);
+    loadAppointments(rangeStart, rangeEnd);
+  }, [rangeStart, rangeEnd]);
 
   useEffect(() => {
     if (!selectedPatientId) {
@@ -542,6 +676,15 @@ function SchedulerApp({ authUser, onLogout }) {
     try {
       const data = await fetchDashboard();
       setDashboard(data);
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  }
+
+  async function loadHolidays() {
+    try {
+      const data = await fetchHolidays();
+      setHolidays(data);
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -589,10 +732,11 @@ function SchedulerApp({ authUser, onLogout }) {
 
   async function refreshAgendaAndHistory(patientId = selectedPatientId) {
     await Promise.all([
-      loadAppointments(weekStart, weekEnd),
+      loadAppointments(rangeStart, rangeEnd),
       loadDashboard(),
       loadTodayAppointments(false),
       loadPatients(patientSearch),
+      loadHolidays(),
       patientId ? fetchPatientHistory(patientId).then(setHistory) : Promise.resolve(),
     ]);
   }
@@ -608,10 +752,126 @@ function SchedulerApp({ authUser, onLogout }) {
     startTransition(() => {
       setWeekAnchor((current) => {
         const next = new Date(current);
-        next.setDate(next.getDate() + direction * 7);
+        if (agendaView === "month") {
+          next.setMonth(next.getMonth() + direction);
+        } else {
+          next.setDate(next.getDate() + direction * 7);
+        }
         return next;
       });
     });
+  }
+
+  async function ensureMonthlyCapacity(formValues, currentPatient = null) {
+    const monthValue = formValues.billing_month || toDateInputValue(new Date()).slice(0, 7) + "-01";
+    const monthDate = parseDateString(monthValue);
+    const currentMonth = new Date();
+    const isCurrentMonth =
+      monthDate.getFullYear() === currentMonth.getFullYear() &&
+      monthDate.getMonth() === currentMonth.getMonth();
+    const currentAssigned = currentPatient?.billing_month
+      ? isSameMonth(currentPatient.billing_month, currentMonth)
+      : false;
+
+    if (!isCurrentMonth) {
+      return formValues;
+    }
+
+    const projectedCount = dashboard?.current_month_new_patients ?? 0;
+    if (projectedCount < MONTHLY_PATIENT_LIMIT || currentAssigned) {
+      return formValues;
+    }
+
+    const nextMonthDate = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1);
+    const result = await Swal.fire({
+      title: "Cupo mensual completo",
+      text: "Ya hay 20 pacientes asignados al mes actual. Puedes dejarlo para el proximo mes.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Pasar al proximo mes",
+      cancelButtonText: "Mantener este mes",
+    });
+
+    if (result.isConfirmed) {
+      return {
+        ...formValues,
+        billing_month: `${toMonthInputValue(nextMonthDate)}-01`,
+      };
+    }
+
+    return formValues;
+  }
+
+  async function openHolidayManager() {
+    const listHtml = holidays.length
+      ? holidays
+          .map(
+            (holiday) => `
+              <article class="swal-history-entry">
+                <div class="swal-history-head">
+                  <strong>${holiday.date}</strong>
+                  <button type="button" class="text-button holiday-delete" data-holiday-id="${holiday.id}">Quitar</button>
+                </div>
+                <small>${holiday.name || "Feriado manual"}</small>
+              </article>
+            `,
+          )
+          .join("")
+      : '<div class="empty-state">Sin feriados cargados.</div>';
+
+    const result = await Swal.fire({
+      title: "Feriados",
+      html: `
+        <div class="swal-form-grid">
+          <div class="swal-history-list">${listHtml}</div>
+          <div class="swal-section-label">Agregar feriado</div>
+          <div class="swal-row">
+            <input id="swal-holiday-date" class="swal2-input" type="date" />
+            <input id="swal-holiday-name" class="swal2-input" placeholder="Descripcion" />
+          </div>
+        </div>
+      `,
+      confirmButtonText: "Guardar",
+      cancelButtonText: "Cerrar",
+      showCancelButton: true,
+      customClass: { popup: "swal-patient-modal" },
+      didOpen: () => {
+        document.querySelectorAll(".holiday-delete").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const holidayId = Number(button.dataset.holidayId);
+            await deleteHoliday(holidayId);
+            await refreshAgendaAndHistory();
+            Swal.close();
+            openHolidayManager();
+          });
+        });
+      },
+      preConfirm: () => {
+        const holidayDate = document.getElementById("swal-holiday-date")?.value || "";
+        const holidayName = document.getElementById("swal-holiday-name")?.value.trim() || "";
+        if (!holidayDate) {
+          return null;
+        }
+        return { date: holidayDate, name: holidayName || null };
+      },
+    });
+
+    if (!result.value) {
+      return;
+    }
+
+    try {
+      await createHoliday(result.value);
+      await refreshAgendaAndHistory();
+    } catch (error) {
+      setErrorMessage(error.message);
+      await Swal.fire({
+        title: "No se pudo guardar",
+        text: error.message,
+        icon: "error",
+        confirmButtonText: "Cerrar",
+      });
+    }
   }
 
   async function openNewPatientModal() {
@@ -631,8 +891,9 @@ function SchedulerApp({ authUser, onLogout }) {
     }
 
     try {
-      const created = await createPatient(patientPayload(formValues));
-      await syncPatientPhoto(created.id, formValues);
+      const preparedValues = await ensureMonthlyCapacity(formValues);
+      const created = await createPatient(patientPayload(preparedValues));
+      await syncPatientPhoto(created.id, preparedValues);
       setSelectedPatientId(created.id);
       await refreshAgendaAndHistory(created.id);
       await Swal.fire({
@@ -720,8 +981,9 @@ function SchedulerApp({ authUser, onLogout }) {
 
     setErrorMessage("");
     try {
-      await updatePatient(patient.id, patientPayload(formValues));
-      await syncPatientPhoto(patient.id, formValues);
+      const preparedValues = await ensureMonthlyCapacity(formValues, patient);
+      await updatePatient(patient.id, patientPayload(preparedValues));
+      await syncPatientPhoto(patient.id, preparedValues);
       setSelectedPatientId(patient.id);
       await refreshAgendaAndHistory(patient.id);
       await Swal.fire({
@@ -965,6 +1227,21 @@ function SchedulerApp({ authUser, onLogout }) {
     });
   }, [appointments, weekDates]);
 
+  const appointmentsByMonthDay = useMemo(() => {
+    return monthGrid.map((date) => {
+      const key = toDateInputValue(date);
+      const items = appointments
+        .filter((appointment) => appointment.date === key)
+        .sort((left, right) => left.time.localeCompare(right.time));
+      return {
+        key,
+        date,
+        items,
+        isCurrentMonth: date.getMonth() === weekAnchor.getMonth(),
+      };
+    });
+  }, [appointments, monthGrid, weekAnchor]);
+
   useEffect(() => {
     const validKeys = new Set(weekDates.map((date) => toDateInputValue(date)));
     if (!validKeys.has(selectedDayKey)) {
@@ -976,6 +1253,8 @@ function SchedulerApp({ authUser, onLogout }) {
   const selectedDaySummary = selectedDay
     ? `${selectedDay.items.length} ${selectedDay.items.length === 1 ? "turno" : "turnos"}`
     : "";
+  const currentMonthRevenue = dashboard?.current_month_projected_revenue ?? 0;
+  const currentMonthPatients = dashboard?.current_month_new_patients ?? 0;
 
   return (
     <div className="app-shell">
@@ -1028,14 +1307,17 @@ function SchedulerApp({ authUser, onLogout }) {
           </div>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="ghost-button" onClick={openHolidayManager}>
+            Feriados
+          </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(-1)}>
-            Semana anterior
+            {agendaView === "month" ? "Mes anterior" : "Semana anterior"}
           </button>
           <button type="button" className="ghost-button" onClick={jumpToCurrentWeek}>
             Hoy
           </button>
           <button type="button" className="ghost-button" onClick={() => shiftWeek(1)}>
-            Semana siguiente
+            {agendaView === "month" ? "Mes siguiente" : "Semana siguiente"}
           </button>
           <button type="button" className="ghost-button" onClick={onLogout}>
             Salir
@@ -1060,6 +1342,14 @@ function SchedulerApp({ authUser, onLogout }) {
           <div>
             <span>Hoy</span>
             <strong>{dashboard.today_label}</strong>
+          </div>
+          <div>
+            <span>Nuevos del mes</span>
+            <strong>{`${currentMonthPatients}/${dashboard.monthly_patient_limit}`}</strong>
+          </div>
+          <div>
+            <span>PAMI estimado</span>
+            <strong>{formatCurrency(currentMonthRevenue)}</strong>
           </div>
         </section>
       ) : null}
@@ -1203,6 +1493,27 @@ function SchedulerApp({ authUser, onLogout }) {
                   </div>
                 ) : null}
 
+                {selectedPatient ? (
+                  <div className="history-plan-card">
+                    <div>
+                      <span>Comienzo</span>
+                      <strong>{selectedPatient.treatment_start_date || "Sin definir"}</strong>
+                    </div>
+                    <div>
+                      <span>Final estimado</span>
+                      <strong>{selectedPatient.treatment_end_date || "Pendiente"}</strong>
+                    </div>
+                    <div>
+                      <span>Mes PAMI</span>
+                      <strong>{selectedPatient.billing_month || "Sin definir"}</strong>
+                    </div>
+                    <div>
+                      <span>Valor total</span>
+                      <strong>{formatCurrency(selectedPatient.projected_revenue)}</strong>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="history-list">
                   {historyPreview.length === 0 ? (
                     <div className="empty-history">Todavia sin registros.</div>
@@ -1235,11 +1546,15 @@ function SchedulerApp({ authUser, onLogout }) {
         <section className="agenda-panel agenda-panel-wide">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">{agendaView === "week" ? "Agenda semanal" : "Agenda del dia"}</p>
+              <p className="eyebrow">
+                {agendaView === "week" ? "Agenda semanal" : agendaView === "day" ? "Agenda del dia" : "Agenda mensual"}
+              </p>
               <h2>
                 {agendaView === "week"
                   ? `${weekdayFormatter.format(weekDates[0])} - ${weekdayFormatter.format(weekDates[4])}`
-                  : selectedDay?.label || ""}
+                  : agendaView === "day"
+                    ? selectedDay?.label || ""
+                    : formatMonthLabel(weekAnchor)}
               </h2>
               {agendaView === "day" ? <p className="agenda-caption">{selectedDaySummary}</p> : null}
             </div>
@@ -1258,6 +1573,13 @@ function SchedulerApp({ authUser, onLogout }) {
                   onClick={() => setAgendaView("day")}
                 >
                   Dia
+                </button>
+                <button
+                  type="button"
+                  className={`view-switch-button ${agendaView === "month" ? "view-switch-button-active" : ""}`}
+                  onClick={() => setAgendaView("month")}
+                >
+                  Mes
                 </button>
               </div>
             </div>
@@ -1315,7 +1637,7 @@ function SchedulerApp({ authUser, onLogout }) {
                 </article>
               ))}
             </div>
-          ) : (
+          ) : agendaView === "day" ? (
             <div className="day-view">
               <div className="day-picker">
                 {appointmentsByDay.map((day) => (
@@ -1371,6 +1693,39 @@ function SchedulerApp({ authUser, onLogout }) {
                   <div className="empty-state">Libre</div>
                 )}
               </section>
+            </div>
+          ) : (
+            <div className="month-grid">
+              {appointmentsByMonthDay.map((day) => (
+                <article
+                  key={day.key}
+                  className={`month-cell ${day.isCurrentMonth ? "" : "month-cell-muted"}`}
+                >
+                  <header className="month-cell-head">
+                    <span>{day.date.getDate()}</span>
+                    <strong>{day.items.length}</strong>
+                  </header>
+                  <div className="month-cell-list">
+                    {day.items.slice(0, 3).map((appointment) => (
+                      <button
+                        key={appointment.id}
+                        type="button"
+                        className={`month-appointment ${
+                          isSameMonth(appointment.patient.billing_month, weekAnchor) ? "month-appointment-new" : ""
+                        }`}
+                        onClick={() => {
+                          setSelectedPatientId(appointment.patient.id);
+                          openAppointmentEditor(appointment);
+                        }}
+                      >
+                        <strong>{appointment.patient.full_name}</strong>
+                        <small>{`${appointment.time.slice(0, 5)} · ${appointment.reason || "Sesion"}`}</small>
+                      </button>
+                    ))}
+                    {day.items.length > 3 ? <small className="month-more">+{day.items.length - 3} mas</small> : null}
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </section>

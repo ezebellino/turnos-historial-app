@@ -1,16 +1,17 @@
-const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 
 const rootDir = path.resolve(__dirname, "..");
 const backendDir = path.join(rootDir, "backend");
-const venvPython = path.join(backendDir, ".venv", "Scripts", "python.exe");
+const preferredPyLauncher = "py";
+const preferredPyArgs = ["-3.10"];
 
-const command = fs.existsSync(venvPython) ? venvPython : "py";
-const args = fs.existsSync(venvPython)
-  ? ["-m", "PyInstaller", "--noconfirm", "turnos_historial.spec"]
-  : ["-3", "-m", "PyInstaller", "--noconfirm", "backend/turnos_historial.spec"];
-const cwd = fs.existsSync(venvPython) ? backendDir : rootDir;
+const usePreferredPy = true;
+const command = usePreferredPy ? preferredPyLauncher : venvPython;
+const args = usePreferredPy
+  ? [...preferredPyArgs, "-m", "PyInstaller", "--noconfirm", "turnos_historial.spec"]
+  : ["-m", "PyInstaller", "--noconfirm", "turnos_historial.spec"];
+const cwd = backendDir;
 
 const child = spawn(command, args, {
   cwd,

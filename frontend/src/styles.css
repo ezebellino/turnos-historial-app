@@ -326,7 +326,7 @@ select {
 
 .overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 24px;
 }
@@ -443,7 +443,7 @@ select {
 
 .view-switch {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 6px;
   border-radius: 999px;
@@ -491,6 +491,71 @@ select {
 .day-view {
   display: grid;
   gap: 16px;
+}
+
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.month-cell {
+  min-height: 148px;
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(247, 251, 255, 0.74);
+  border: 1px solid rgba(45, 108, 223, 0.08);
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.month-cell-muted {
+  opacity: 0.52;
+}
+
+.month-cell-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.month-cell-head strong {
+  color: var(--text);
+}
+
+.month-cell-list {
+  display: grid;
+  gap: 8px;
+}
+
+.month-appointment {
+  width: 100%;
+  border: 1px solid rgba(45, 108, 223, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.month-appointment strong,
+.month-appointment small {
+  display: block;
+}
+
+.month-appointment small {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.month-appointment-new {
+  background: linear-gradient(180deg, rgba(28, 181, 166, 0.16), rgba(142, 200, 255, 0.14));
+  border-color: rgba(28, 181, 166, 0.22);
+}
+
+.month-more {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .day-picker {
@@ -666,6 +731,31 @@ select {
   padding-right: 4px;
 }
 
+.history-plan-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.history-plan-card div {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.history-plan-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.history-plan-card strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1rem;
+}
+
 .patient-item {
   width: 100%;
   text-align: left;
@@ -754,10 +844,42 @@ select {
   gap: 8px;
 }
 
+.swal-section-label {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .swal-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.weekday-picker {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.weekday-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--text);
+}
+
+.weekday-chip input {
+  margin: 0;
 }
 
 .swal-photo-field {
@@ -931,12 +1053,20 @@ select {
 }
 
 @media (max-width: 1180px) {
+  .overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
 
   .day-picker {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .month-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .week-grid {
@@ -964,9 +1094,12 @@ select {
 
   .overview,
   .week-grid,
+  .month-grid,
   .session-summary,
+  .history-plan-card,
   .swal-row,
-  .day-picker {
+  .day-picker,
+  .weekday-picker {
     grid-template-columns: 1fr;
   }
 
