@@ -16,6 +16,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     recovery_code_hash: Mapped[str] = mapped_column(String(256))
     session_token_hash: Mapped[str | None] = mapped_column(String(256), default=None)
+    institutional_rate: Mapped[int] = mapped_column(Integer, default=0)
+    domiciliary_rate: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -29,6 +31,7 @@ class Patient(Base):
     email: Mapped[str | None] = mapped_column(String(120), default=None)
     diagnosis: Mapped[str | None] = mapped_column(String(160), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
+    care_mode: Mapped[str] = mapped_column(String(20), default="institutional")
     prescribed_sessions: Mapped[int] = mapped_column(default=0)
     treatment_start_date: Mapped[date | None] = mapped_column(Date, default=None)
     billing_month: Mapped[date | None] = mapped_column(Date, default=None)

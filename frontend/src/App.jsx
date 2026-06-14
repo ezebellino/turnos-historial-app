@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import {
+  applyBulkPricing,
   createHoliday,
   clearStoredSessionToken,
   createAppointment,
@@ -15,6 +16,7 @@ import {
   fetchHolidays,
   fetchPatientHistory,
   fetchPatients,
+  fetchPricingSettings,
   getStoredSessionToken,
   login,
   logout,
@@ -25,6 +27,7 @@ import {
   setupAuth,
   uploadPatientPhoto,
   updateAppointment,
+  updatePricingSettings,
   updatePatient,
 } from "./api";
 import appLogo from "../logoTurnosHistorialAPP.png";
@@ -50,6 +53,15 @@ const STATUS_CLASS = {
   scheduled: "status-planned",
   completed: "status-done",
   cancelled: "status-cancelled",
+};
+const CARE_MODE_LABELS = {
+  institutional: "Institucional",
+  domiciliary: "Domiciliario",
+};
+const PRICING_SCOPE_LABELS = {
+  all: "Todos",
+  institutional: "Institucional",
+  domiciliary: "Domiciliario",
 };
 
 const MONTH_NAMES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -164,6 +176,26 @@ function buildWhatsappMessage(appointment) {
   return `Hola ${appointment.patient.full_name}, te recordamos tu turno de kinesiologia de hoy a las ${time}.`;
 }
 
+function buildWhatsappUrl(phone, message) {
+  const sanitized = sanitizeWhatsappNumber(phone);
+  if (!sanitized) {
+    return "";
+  }
+  return `https://web.whatsapp.com/send?phone=${sanitized}&text=${encodeURIComponent(message)}`;
+}
+
+function isLastSessionAppointment(appointment) {
+  return (
+    Boolean(appointment?.session_number) &&
+    Boolean(appointment?.patient?.prescribed_sessions) &&
+    appointment.session_number === appointment.patient.prescribed_sessions
+  );
+}
+
+function holidayLabel(holiday) {
+  return holiday?.name || "Feriado";
+}
+
 function buildRecoveryCodeMessage(code) {
   return `Tu codigo de recuperacion de Turnos Historial App es: ${code}`;
 }
@@ -181,7 +213,7 @@ function patientInitials(fullName) {
     .join("") || "?";
 }
 
-function validateAppointmentInput({ date, time }) {
+function validateAppointmentInput({ patient_id, date, time }, { patients = [], holidayDates = new Set() } = {}) {
   if (!date || !time) {
     return "Completa fecha y hora.";
   }
@@ -196,6 +228,11 @@ function validateAppointmentInput({ date, time }) {
     return "El horario debe estar entre las 08:00 y las 19:00.";
   }
 
+  const patient = patients.find((entry) => entry.id === Number(patient_id));
+  if (holidayDates.has(date) && patient && patient.care_mode !== "domiciliary") {
+    return "Ese dia esta marcado como feriado. Solo puedes cargar turnos domiciliarios.";
+  }
+
   return null;
 }
 
@@ -208,8 +245,11 @@ function selectedWeekdayValues(patient = {}) {
   return new Set(values);
 }
 
-function patientFormHtml(patient = {}) {
+function patientFormHtml(patient = {}, pricingSettings = { institutional_rate: 0, domiciliary_rate: 0 }) {
   const selectedWeekdays = selectedWeekdayValues(patient);
+  const careMode = patient.care_mode || "institutional";
+  const defaultPrice =
+    careMode === "domiciliary" ? pricingSettings.domiciliary_rate : pricingSettings.institutional_rate;
   return `
     <div class="swal-form-grid">
       <div class="swal-photo-field">
@@ -231,9 +271,13 @@ function patientFormHtml(patient = {}) {
       <input id="swal-diagnosis" class="swal2-input" placeholder="Diagnostico" value="${patient.diagnosis || ""}" />
       <input id="swal-sessions" class="swal2-input" type="number" min="0" max="120" placeholder="Cantidad de sesiones" value="${patient.prescribed_sessions ?? 10}" />
       <div class="swal-section-label">Plan terapeutico</div>
+      <select id="swal-care-mode" class="swal2-input">
+        <option value="institutional" ${careMode === "institutional" ? "selected" : ""}>Institucional</option>
+        <option value="domiciliary" ${careMode === "domiciliary" ? "selected" : ""}>Domiciliario</option>
+      </select>
       <div class="swal-row">
         <input id="swal-start-date" class="swal2-input" type="date" value="${patient.treatment_start_date || toDateInputValue(getNextBusinessDate())}" />
-        <input id="swal-session-price" class="swal2-input" type="number" min="0" step="100" placeholder="Valor por paciente" value="${patient.session_price ?? 0}" />
+        <input id="swal-session-price" class="swal2-input" type="number" min="0" step="100" placeholder="Valor por paciente" value="${patient.session_price ?? defaultPrice}" />
       </div>
       <div class="swal-row">
         <input id="swal-billing-month" class="swal2-input" type="month" value="${
@@ -258,6 +302,23 @@ function patientFormHtml(patient = {}) {
       <textarea id="swal-notes" class="swal2-textarea" placeholder="Notas">${patient.notes || ""}</textarea>
     </div>
   `;
+}
+
+function setupPatientPricingAssistant(pricingSettings = { institutional_rate: 0, domiciliary_rate: 0 }) {
+  const modeInput = document.getElementById("swal-care-mode");
+  const priceInput = document.getElementById("swal-session-price");
+  if (!modeInput || !priceInput) {
+    return;
+  }
+
+  modeInput.addEventListener("change", (event) => {
+    const nextMode = event.target.value;
+    const nextPrice =
+      nextMode === "domiciliary" ? pricingSettings.domiciliary_rate : pricingSettings.institutional_rate;
+    if (!priceInput.value || Number(priceInput.value) === 0) {
+      priceInput.value = String(nextPrice || 0);
+    }
+  });
 }
 
 function readPatientFormValues() {
@@ -315,6 +376,7 @@ function readPatientFormValues() {
     email: email || null,
     diagnosis,
     notes,
+    care_mode: document.getElementById("swal-care-mode")?.value || "institutional",
     prescribed_sessions: prescribedSessions,
     treatment_start_date: treatmentStartDate,
     billing_month: billingMonth,
@@ -339,6 +401,7 @@ function appointmentFormHtml({ patients, appointment }) {
 
   return `
     <div class="swal-form-grid">
+      <div class="swal-section-label">Paciente y horario</div>
       <input id="swal-patient-search" class="swal2-input" placeholder="Buscar paciente" value="" />
       <select id="swal-patient-id" class="swal2-input">
         <option value="">Seleccionar paciente</option>
@@ -353,6 +416,27 @@ function appointmentFormHtml({ patients, appointment }) {
         <option value="completed" ${appointment.status === "completed" ? "selected" : ""}>Realizado</option>
         <option value="cancelled" ${appointment.status === "cancelled" ? "selected" : ""}>Cancelado</option>
       </select>
+      <div class="swal-section-label">Programacion automatica</div>
+      <label class="swal-photo-remove">
+        <input id="swal-appointment-auto-schedule" type="checkbox" ${appointment.auto_schedule_enabled ? "checked" : ""} />
+        Programar turnos fijos desde este turno
+      </label>
+      <div class="swal-row">
+        <input id="swal-appointment-sessions" class="swal2-input" type="number" min="0" max="120" placeholder="Cantidad de sesiones" value="${appointment.prescribed_sessions ?? 0}" />
+        <input id="swal-appointment-start-date" class="swal2-input" type="date" value="${appointment.date || ""}" />
+      </div>
+      <div class="weekday-picker weekday-picker-wide">
+        ${WEEKDAY_OPTIONS.map(
+          (option) => `
+            <label class="weekday-chip weekday-chip-wide">
+              <input type="checkbox" id="swal-appointment-weekday-${option.value}" ${appointment.preferred_weekdays?.includes(option.value) ? "checked" : ""} />
+              <span>${option.label}</span>
+            </label>
+          `,
+        ).join("")}
+      </div>
+      <small class="swal-helper-copy">Si activas esta opcion, la app guarda este horario como patron fijo del paciente.</small>
+      <div class="swal-section-label">Detalle clinico</div>
       <input id="swal-reason" class="swal2-input" placeholder="Motivo" value="${appointment.reason || ""}" />
       <textarea id="swal-evolution" class="swal2-textarea" placeholder="Evolucion">${appointment.evolution_note || ""}</textarea>
     </div>
@@ -391,7 +475,55 @@ function setupPatientFilter(patients, selectedId) {
   });
 }
 
+function setupAppointmentAutomationAssistant(patients) {
+  const patientSelect = document.getElementById("swal-patient-id");
+  const autoScheduleInput = document.getElementById("swal-appointment-auto-schedule");
+  const sessionInput = document.getElementById("swal-appointment-sessions");
+  const startDateInput = document.getElementById("swal-appointment-start-date");
+
+  if (!patientSelect || !autoScheduleInput || !sessionInput || !startDateInput) {
+    return;
+  }
+
+  const applyPatientDefaults = () => {
+    const patientId = Number(patientSelect.value || 0);
+    const patient = patients.find((entry) => entry.id === patientId);
+    if (!patient) {
+      return;
+    }
+
+    if (!sessionInput.value || Number(sessionInput.value) === 0) {
+      sessionInput.value = String(patient.prescribed_sessions ?? 0);
+    }
+
+    if (!startDateInput.value && patient.treatment_start_date) {
+      startDateInput.value = patient.treatment_start_date;
+    }
+
+    WEEKDAY_OPTIONS.forEach((option) => {
+      const checkbox = document.getElementById(`swal-appointment-weekday-${option.value}`);
+      if (!checkbox) {
+        return;
+      }
+      const preferred = Array.isArray(patient.preferred_weekdays) ? patient.preferred_weekdays : [];
+      checkbox.checked = preferred.includes(option.value);
+    });
+
+    if (patient.auto_schedule_enabled && !autoScheduleInput.checked) {
+      autoScheduleInput.checked = true;
+    }
+  };
+
+  patientSelect.addEventListener("change", applyPatientDefaults);
+  applyPatientDefaults();
+}
+
 function readAppointmentFormValues() {
+  const autoScheduleEnabled = Boolean(document.getElementById("swal-appointment-auto-schedule")?.checked);
+  const preferredWeekdays = WEEKDAY_OPTIONS.filter((option) =>
+    document.getElementById(`swal-appointment-weekday-${option.value}`)?.checked,
+  ).map((option) => option.value);
+  const prescribedSessions = Number(document.getElementById("swal-appointment-sessions")?.value ?? 0);
   const payload = {
     patient_id: Number(document.getElementById("swal-patient-id")?.value || 0),
     date: document.getElementById("swal-date")?.value || "",
@@ -400,6 +532,10 @@ function readAppointmentFormValues() {
     status: document.getElementById("swal-status")?.value || "scheduled",
     reason: document.getElementById("swal-reason")?.value.trim() || "",
     evolution_note: document.getElementById("swal-evolution")?.value.trim() || "",
+    auto_schedule_enabled: autoScheduleEnabled,
+    preferred_weekdays: preferredWeekdays,
+    treatment_start_date: document.getElementById("swal-appointment-start-date")?.value || null,
+    prescribed_sessions: prescribedSessions,
   };
 
   if (!payload.patient_id) {
@@ -407,10 +543,15 @@ function readAppointmentFormValues() {
     return null;
   }
 
-  const validationError = validateAppointmentInput(payload);
-  if (validationError) {
-    Swal.showValidationMessage(validationError);
-    return null;
+  if (autoScheduleEnabled) {
+    if (!payload.treatment_start_date || preferredWeekdays.length === 0) {
+      Swal.showValidationMessage("Para programar automaticamente completa fecha de inicio y al menos un dia fijo.");
+      return null;
+    }
+    if (Number.isNaN(prescribedSessions) || prescribedSessions <= 0) {
+      Swal.showValidationMessage("La programacion automatica necesita una cantidad de sesiones mayor a 0.");
+      return null;
+    }
   }
 
   return payload;
@@ -429,6 +570,20 @@ async function syncPatientPhoto(patientId, formValues) {
 function patientPayload(formValues) {
   const { photo_file, remove_photo, ...payload } = formValues;
   return payload;
+}
+
+function appointmentAutomationPayload(formValues) {
+  if (!formValues.auto_schedule_enabled) {
+    return null;
+  }
+
+  return {
+    prescribed_sessions: formValues.prescribed_sessions,
+    treatment_start_date: formValues.treatment_start_date || formValues.date,
+    preferred_time: formValues.time,
+    preferred_weekdays: formValues.preferred_weekdays,
+    auto_schedule_enabled: true,
+  };
 }
 
 function buildAppointmentUpdatePayload(appointment, formValues) {
@@ -627,6 +782,10 @@ function SchedulerApp({ authUser, onLogout }) {
   const [weekAnchor, setWeekAnchor] = useState(new Date());
   const [agendaView, setAgendaView] = useState("week");
   const [dashboard, setDashboard] = useState(null);
+  const [pricingSettings, setPricingSettings] = useState({
+    institutional_rate: 0,
+    domiciliary_rate: 0,
+  });
   const [patients, setPatients] = useState([]);
   const [appointments, setAppointments] = useState([]);
   const [holidays, setHolidays] = useState([]);
@@ -638,7 +797,9 @@ function SchedulerApp({ authUser, onLogout }) {
   const [patientSearch, setPatientSearch] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [sideSection, setSideSection] = useState("patients");
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [selectedDayKey, setSelectedDayKey] = useState(toDateInputValue(getNextBusinessDate()));
+  const [historyOrder, setHistoryOrder] = useState("desc");
 
   const weekDates = useMemo(() => getWeekRange(weekAnchor), [weekAnchor]);
   const monthGrid = useMemo(() => getMonthGrid(weekAnchor), [weekAnchor]);
@@ -647,9 +808,18 @@ function SchedulerApp({ authUser, onLogout }) {
   const weekEnd = toDateInputValue(weekDates[4]);
   const rangeStart = toDateInputValue(monthRange.start);
   const rangeEnd = toDateInputValue(monthRange.end);
+  const holidayByDate = useMemo(
+    () => new Map(holidays.map((holiday) => [holiday.date, holiday])),
+    [holidays],
+  );
+  const holidayDates = useMemo(
+    () => new Set(holidays.map((holiday) => holiday.date)),
+    [holidays],
+  );
 
   useEffect(() => {
     loadDashboard();
+    loadPricingSettings();
     loadTodayAppointments(true);
     loadHolidays();
   }, []);
@@ -676,6 +846,15 @@ function SchedulerApp({ authUser, onLogout }) {
     try {
       const data = await fetchDashboard();
       setDashboard(data);
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  }
+
+  async function loadPricingSettings() {
+    try {
+      const data = await fetchPricingSettings();
+      setPricingSettings(data);
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -734,6 +913,7 @@ function SchedulerApp({ authUser, onLogout }) {
     await Promise.all([
       loadAppointments(rangeStart, rangeEnd),
       loadDashboard(),
+      loadPricingSettings(),
       loadTodayAppointments(false),
       loadPatients(patientSearch),
       loadHolidays(),
@@ -874,15 +1054,105 @@ function SchedulerApp({ authUser, onLogout }) {
     }
   }
 
-  async function openNewPatientModal() {
-    const { value: formValues } = await Swal.fire({
-      title: "Nuevo paciente",
-      html: patientFormHtml(),
+  async function openPricingManager() {
+    const { value } = await Swal.fire({
+      title: "Precios",
+      html: `
+        <div class="swal-form-grid">
+          <div class="swal-section-label">Valores por modo</div>
+          <div class="swal-pricing-grid">
+            <label class="swal-field-block">
+              <span class="swal-field-label">Monto institucional</span>
+              <input id="swal-institutional-rate" class="swal2-input" type="number" min="0" step="100" placeholder="Monto institucional" value="${pricingSettings.institutional_rate ?? 0}" />
+            </label>
+            <label class="swal-field-block">
+              <span class="swal-field-label">Monto domiciliario</span>
+              <input id="swal-domiciliary-rate" class="swal2-input" type="number" min="0" step="100" placeholder="Monto domiciliario" value="${pricingSettings.domiciliary_rate ?? 0}" />
+            </label>
+          </div>
+          <div class="swal-section-label">Aplicar precio general</div>
+          <div class="swal-row">
+            <input id="swal-bulk-price" class="swal2-input" type="number" min="0" step="100" placeholder="Monto" />
+            <select id="swal-bulk-scope" class="swal2-input">
+              <option value="all">Todos</option>
+              <option value="institutional">Institucional</option>
+              <option value="domiciliary">Domiciliario</option>
+            </select>
+          </div>
+        </div>
+      `,
       focusConfirm: false,
       confirmButtonText: "Guardar",
       cancelButtonText: "Cancelar",
       showCancelButton: true,
       customClass: { popup: "swal-patient-modal" },
+      preConfirm: () => {
+        const institutionalRate = Number(document.getElementById("swal-institutional-rate")?.value ?? 0);
+        const domiciliaryRate = Number(document.getElementById("swal-domiciliary-rate")?.value ?? 0);
+        const bulkAmountRaw = document.getElementById("swal-bulk-price")?.value ?? "";
+        const bulkScope = document.getElementById("swal-bulk-scope")?.value || "all";
+
+        if ([institutionalRate, domiciliaryRate].some((amount) => Number.isNaN(amount) || amount < 0)) {
+          Swal.showValidationMessage("Los valores por modo deben ser numeros validos.");
+          return null;
+        }
+
+        if (bulkAmountRaw !== "" && (Number.isNaN(Number(bulkAmountRaw)) || Number(bulkAmountRaw) < 0)) {
+          Swal.showValidationMessage("El precio general debe ser un numero valido.");
+          return null;
+        }
+
+        return {
+          settings: {
+            institutional_rate: institutionalRate,
+            domiciliary_rate: domiciliaryRate,
+          },
+          bulkAmount: bulkAmountRaw === "" ? null : Number(bulkAmountRaw),
+          bulkScope,
+        };
+      },
+    });
+
+    if (!value) {
+      return;
+    }
+
+    try {
+      await updatePricingSettings(value.settings);
+      if (value.bulkAmount !== null) {
+        await applyBulkPricing({
+          amount: value.bulkAmount,
+          scope: value.bulkScope,
+        });
+      }
+      await refreshAgendaAndHistory();
+      await Swal.fire({
+        title: value.bulkAmount !== null ? `Precio aplicado a ${PRICING_SCOPE_LABELS[value.bulkScope]}` : "Precios actualizados",
+        icon: "success",
+        timer: 1200,
+        showConfirmButton: false,
+      });
+    } catch (error) {
+      setErrorMessage(error.message);
+      await Swal.fire({
+        title: "No se pudo guardar",
+        text: error.message,
+        icon: "error",
+        confirmButtonText: "Cerrar",
+      });
+    }
+  }
+
+  async function openNewPatientModal() {
+    const { value: formValues } = await Swal.fire({
+      title: "Nuevo paciente",
+      html: patientFormHtml({}, pricingSettings),
+      focusConfirm: false,
+      confirmButtonText: "Guardar",
+      cancelButtonText: "Cancelar",
+      showCancelButton: true,
+      customClass: { popup: "swal-patient-modal" },
+      didOpen: () => setupPatientPricingAssistant(pricingSettings),
       preConfirm: readPatientFormValues,
     });
 
@@ -916,7 +1186,7 @@ function SchedulerApp({ authUser, onLogout }) {
   async function openPatientEditor(patient) {
     const { value: formValues, isDenied } = await Swal.fire({
       title: "Editar paciente",
-      html: patientFormHtml(patient),
+      html: patientFormHtml(patient, pricingSettings),
       focusConfirm: false,
       confirmButtonText: "Guardar",
       denyButtonText: "Eliminar",
@@ -924,6 +1194,7 @@ function SchedulerApp({ authUser, onLogout }) {
       showCancelButton: true,
       showDenyButton: true,
       customClass: { popup: "swal-patient-modal" },
+      didOpen: () => setupPatientPricingAssistant(pricingSettings),
       preConfirm: readPatientFormValues,
     });
 
@@ -1005,6 +1276,7 @@ function SchedulerApp({ authUser, onLogout }) {
 
   async function openNewAppointmentModal(defaultPatientId = selectedPatientId) {
     const suggestedDate = toDateInputValue(getNextBusinessDate());
+    const defaultPatient = patients.find((patient) => patient.id === defaultPatientId) ?? null;
     const { value: formValues } = await Swal.fire({
       title: "Nuevo turno",
       html: appointmentFormHtml({
@@ -1016,6 +1288,9 @@ function SchedulerApp({ authUser, onLogout }) {
           status: "scheduled",
           reason: "",
           evolution_note: "",
+          auto_schedule_enabled: Boolean(defaultPatient?.auto_schedule_enabled),
+          preferred_weekdays: Array.isArray(defaultPatient?.preferred_weekdays) ? defaultPatient.preferred_weekdays : [],
+          prescribed_sessions: defaultPatient?.prescribed_sessions ?? 0,
         },
       }),
       focusConfirm: false,
@@ -1023,8 +1298,22 @@ function SchedulerApp({ authUser, onLogout }) {
       cancelButtonText: "Cancelar",
       showCancelButton: true,
       customClass: { popup: "swal-patient-modal" },
-      didOpen: () => setupPatientFilter(patients, defaultPatientId),
-      preConfirm: readAppointmentFormValues,
+      didOpen: () => {
+        setupPatientFilter(patients, defaultPatientId);
+        setupAppointmentAutomationAssistant(patients);
+      },
+      preConfirm: () => {
+        const values = readAppointmentFormValues();
+        if (!values) {
+          return null;
+        }
+        const validationError = validateAppointmentInput(values, { patients, holidayDates });
+        if (validationError) {
+          Swal.showValidationMessage(validationError);
+          return null;
+        }
+        return values;
+      },
     });
 
     if (!formValues) {
@@ -1032,11 +1321,23 @@ function SchedulerApp({ authUser, onLogout }) {
     }
 
     try {
-      await createAppointment(formValues);
+      await createAppointment({
+        patient_id: formValues.patient_id,
+        date: formValues.date,
+        time: formValues.time,
+        duration_minutes: formValues.duration_minutes,
+        status: formValues.status,
+        reason: formValues.reason,
+        evolution_note: formValues.evolution_note,
+      });
+      const automationPayload = appointmentAutomationPayload(formValues);
+      if (automationPayload) {
+        await updatePatient(formValues.patient_id, automationPayload);
+      }
       setSelectedPatientId(formValues.patient_id);
       await refreshAgendaAndHistory(formValues.patient_id);
       await Swal.fire({
-        title: "Turno creado",
+        title: automationPayload ? "Turno y cronograma creados" : "Turno creado",
         icon: "success",
         timer: 1200,
         showConfirmButton: false,
@@ -1078,7 +1379,18 @@ function SchedulerApp({ authUser, onLogout }) {
       reverseButtons: true,
       customClass: { popup: "swal-patient-modal" },
       didOpen: () => setupPatientFilter(patients, appointment.patient.id),
-      preConfirm: readAppointmentFormValues,
+      preConfirm: () => {
+        const values = readAppointmentFormValues();
+        if (!values) {
+          return null;
+        }
+        const validationError = validateAppointmentInput(values, { patients, holidayDates });
+        if (validationError) {
+          Swal.showValidationMessage(validationError);
+          return null;
+        }
+        return values;
+      },
     });
 
     if (result.isDenied || result.dismiss === Swal.DismissReason.close) {
@@ -1149,14 +1461,13 @@ function SchedulerApp({ authUser, onLogout }) {
   }
 
   function openWhatsappReminder(appointment) {
-    const phone = sanitizeWhatsappNumber(appointment.patient.phone);
-    if (!phone) {
+    const whatsappUrl = buildWhatsappUrl(appointment.patient.phone, buildWhatsappMessage(appointment));
+    if (!whatsappUrl) {
       setErrorMessage("El paciente no tiene un telefono valido para WhatsApp.");
       return;
     }
 
-    const message = encodeURIComponent(buildWhatsappMessage(appointment));
-    window.open(`https://wa.me/${phone}?text=${message}`, "_blank", "noopener,noreferrer");
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
   }
 
   async function openHistoryModal() {
@@ -1164,7 +1475,7 @@ function SchedulerApp({ authUser, onLogout }) {
       return;
     }
 
-    const historyHtml = history
+    const historyHtml = sortedHistory
       .map(
         (entry) => `
           <article class="swal-history-entry">
@@ -1181,7 +1492,12 @@ function SchedulerApp({ authUser, onLogout }) {
 
     await Swal.fire({
       title: `Historial de ${selectedPatient.full_name}`,
-      html: `<div class="swal-history-list">${historyHtml}</div>`,
+      html: `
+        <div class="swal-history-toolbar">
+          <span>Orden actual: ${historyOrder === "desc" ? "Ultima a primera" : "Primera a ultima"}</span>
+        </div>
+        <div class="swal-history-list">${historyHtml}</div>
+      `,
       width: 720,
       confirmButtonText: "Cerrar",
       customClass: { popup: "swal-patient-modal swal-history-modal" },
@@ -1189,7 +1505,18 @@ function SchedulerApp({ authUser, onLogout }) {
   }
 
   const selectedPatient = patients.find((patient) => patient.id === selectedPatientId) ?? null;
-  const historyPreview = history.slice(0, 2);
+  const sortedHistory = useMemo(() => {
+    const copy = [...history];
+    copy.sort((left, right) => {
+      const leftKey = `${left.date}T${left.time}`;
+      const rightKey = `${right.date}T${right.time}`;
+      return historyOrder === "desc"
+        ? rightKey.localeCompare(leftKey)
+        : leftKey.localeCompare(rightKey);
+    });
+    return copy;
+  }, [history, historyOrder]);
+  const historyPreview = sortedHistory.slice(0, 2);
 
   const appointmentsByDay = useMemo(() => {
     return weekDates.map((date) => {
@@ -1223,9 +1550,10 @@ function SchedulerApp({ authUser, onLogout }) {
         label: weekdayFormatter.format(date),
         items,
         slots: grouped,
+        holiday: holidayByDate.get(key) || null,
       };
     });
-  }, [appointments, weekDates]);
+  }, [appointments, holidayByDate, weekDates]);
 
   const appointmentsByMonthDay = useMemo(() => {
     return monthGrid.map((date) => {
@@ -1238,9 +1566,10 @@ function SchedulerApp({ authUser, onLogout }) {
         date,
         items,
         isCurrentMonth: date.getMonth() === weekAnchor.getMonth(),
+        holiday: holidayByDate.get(key) || null,
       };
     });
-  }, [appointments, monthGrid, weekAnchor]);
+  }, [appointments, holidayByDate, monthGrid, weekAnchor]);
 
   useEffect(() => {
     const validKeys = new Set(weekDates.map((date) => toDateInputValue(date)));
@@ -1285,7 +1614,7 @@ function SchedulerApp({ authUser, onLogout }) {
                     onClick={() => openWhatsappReminder(appointment)}
                     disabled={!sanitizeWhatsappNumber(appointment.patient.phone)}
                   >
-                    WhatsApp
+                    WhatsApp Web
                   </button>
                 </article>
               ))}
@@ -1307,6 +1636,9 @@ function SchedulerApp({ authUser, onLogout }) {
           </div>
         </div>
         <div className="topbar-actions">
+          <button type="button" className="ghost-button" onClick={openPricingManager}>
+            Precios
+          </button>
           <button type="button" className="ghost-button" onClick={openHolidayManager}>
             Feriados
           </button>
@@ -1356,7 +1688,8 @@ function SchedulerApp({ authUser, onLogout }) {
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
 
-      <main className="workspace">
+      <main className={`workspace ${sidebarHidden ? "workspace-sidebar-hidden" : ""}`}>
+        {!sidebarHidden ? (
         <aside className="sidebar-shell">
           <section className="pane sidebar-pane">
             <div className="sidebar-actions">
@@ -1496,6 +1829,14 @@ function SchedulerApp({ authUser, onLogout }) {
                 {selectedPatient ? (
                   <div className="history-plan-card">
                     <div>
+                      <span>Modo</span>
+                      <strong>{CARE_MODE_LABELS[selectedPatient.care_mode] || "Institucional"}</strong>
+                    </div>
+                    <div>
+                      <span>Valor sesion</span>
+                      <strong>{formatCurrency(selectedPatient.session_price)}</strong>
+                    </div>
+                    <div>
                       <span>Comienzo</span>
                       <strong>{selectedPatient.treatment_start_date || "Sin definir"}</strong>
                     </div>
@@ -1519,12 +1860,20 @@ function SchedulerApp({ authUser, onLogout }) {
                     <div className="empty-history">Todavia sin registros.</div>
                   ) : (
                     historyPreview.map((entry) => (
-                      <article key={entry.id} className="history-entry">
+                      <article
+                        key={entry.id}
+                        className={`history-entry ${isLastSessionAppointment(entry) ? "history-entry-last" : ""}`}
+                      >
                         <div className="history-head">
                           <strong>{entry.date}</strong>
-                          <span className={`status-chip ${STATUS_CLASS[entry.status]}`}>
-                            {STATUS_LABELS[entry.status]}
-                          </span>
+                          <div className="history-head-badges">
+                            {isLastSessionAppointment(entry) ? (
+                              <span className="last-session-badge">Ultimo turno</span>
+                            ) : null}
+                            <span className={`status-chip ${STATUS_CLASS[entry.status]}`}>
+                              {STATUS_LABELS[entry.status]}
+                            </span>
+                          </div>
                         </div>
                         <p>{entry.reason || "Sesion general"}</p>
                         <small>{entry.evolution_note || "Sin notas clinicas."}</small>
@@ -1534,14 +1883,24 @@ function SchedulerApp({ authUser, onLogout }) {
                 </div>
 
                 {history.length > 2 ? (
-                  <button type="button" className="ghost-button" onClick={openHistoryModal}>
-                    Ver todo
-                  </button>
+                  <div className="history-actions">
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => setHistoryOrder((current) => (current === "desc" ? "asc" : "desc"))}
+                    >
+                      {historyOrder === "desc" ? "Primera sesion primero" : "Ultima sesion primero"}
+                    </button>
+                    <button type="button" className="ghost-button" onClick={openHistoryModal}>
+                      Ver todo
+                    </button>
+                  </div>
                 ) : null}
               </>
             )}
           </section>
         </aside>
+        ) : null}
 
         <section className="agenda-panel agenda-panel-wide">
           <div className="section-heading">
@@ -1559,6 +1918,13 @@ function SchedulerApp({ authUser, onLogout }) {
               {agendaView === "day" ? <p className="agenda-caption">{selectedDaySummary}</p> : null}
             </div>
             <div className="agenda-toolbar">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setSidebarHidden((current) => !current)}
+              >
+                {sidebarHidden ? "Mostrar panel" : "Ocultar panel"}
+              </button>
               <div className="view-switch">
                 <button
                   type="button"
@@ -1588,9 +1954,12 @@ function SchedulerApp({ authUser, onLogout }) {
           {agendaView === "week" ? (
             <div className="week-grid week-grid-scroll">
               {appointmentsByDay.map((day) => (
-                <article key={day.key} className="day-column">
+                <article key={day.key} className={`day-column ${day.holiday ? "day-column-holiday" : ""}`}>
                   <header className="day-column-head">
-                    <span>{day.label}</span>
+                    <div className="day-column-title">
+                      <span>{day.label}</span>
+                      {day.holiday ? <small className="holiday-badge">{holidayLabel(day.holiday)}</small> : null}
+                    </div>
                     <strong>{day.items.length}</strong>
                   </header>
 
@@ -1610,7 +1979,7 @@ function SchedulerApp({ authUser, onLogout }) {
                               <button
                                 key={appointment.id}
                                 type="button"
-                                className={`appointment-row ${
+                                className={`appointment-row ${isLastSessionAppointment(appointment) ? "appointment-row-last" : ""} ${
                                   selectedAppointmentId === appointment.id ? "appointment-row-active" : ""
                                 }`}
                                 onClick={() => {
@@ -1623,6 +1992,9 @@ function SchedulerApp({ authUser, onLogout }) {
                                   <small>{appointment.reason || "Sesion general"}</small>
                                 </div>
                                 <div className="appointment-row-meta">
+                                  {isLastSessionAppointment(appointment) ? (
+                                    <span className="last-session-badge">Ultimo turno</span>
+                                  ) : null}
                                   <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
                                     {STATUS_LABELS[appointment.status]}
                                   </span>
@@ -1644,11 +2016,12 @@ function SchedulerApp({ authUser, onLogout }) {
                   <button
                     key={day.key}
                     type="button"
-                    className={`day-pill ${selectedDayKey === day.key ? "day-pill-active" : ""}`}
+                    className={`day-pill ${selectedDayKey === day.key ? "day-pill-active" : ""} ${day.holiday ? "day-pill-holiday" : ""}`}
                     onClick={() => setSelectedDayKey(day.key)}
                   >
                     <span>{day.label}</span>
                     <strong>{day.items.length}</strong>
+                    {day.holiday ? <small className="holiday-badge">{holidayLabel(day.holiday)}</small> : null}
                   </button>
                 ))}
               </div>
@@ -1667,7 +2040,7 @@ function SchedulerApp({ authUser, onLogout }) {
                           <button
                             key={appointment.id}
                             type="button"
-                            className={`appointment-row appointment-row-detailed ${
+                            className={`appointment-row appointment-row-detailed ${isLastSessionAppointment(appointment) ? "appointment-row-last" : ""} ${
                               selectedAppointmentId === appointment.id ? "appointment-row-active" : ""
                             }`}
                             onClick={() => {
@@ -1680,6 +2053,9 @@ function SchedulerApp({ authUser, onLogout }) {
                               <small>{appointment.reason || "Sesion general"}</small>
                             </div>
                             <div className="appointment-row-meta">
+                              {isLastSessionAppointment(appointment) ? (
+                                <span className="last-session-badge">Ultimo turno</span>
+                              ) : null}
                               <span className={`status-chip ${STATUS_CLASS[appointment.status]}`}>
                                 {STATUS_LABELS[appointment.status]}
                               </span>
@@ -1699,10 +2075,13 @@ function SchedulerApp({ authUser, onLogout }) {
               {appointmentsByMonthDay.map((day) => (
                 <article
                   key={day.key}
-                  className={`month-cell ${day.isCurrentMonth ? "" : "month-cell-muted"}`}
+                  className={`month-cell ${day.isCurrentMonth ? "" : "month-cell-muted"} ${day.holiday ? "month-cell-holiday" : ""}`}
                 >
                   <header className="month-cell-head">
-                    <span>{day.date.getDate()}</span>
+                    <div className="month-cell-title">
+                      <span>{day.date.getDate()}</span>
+                      {day.holiday ? <small className="holiday-badge">{holidayLabel(day.holiday)}</small> : null}
+                    </div>
                     <strong>{day.items.length}</strong>
                   </header>
                   <div className="month-cell-list">
@@ -1710,7 +2089,7 @@ function SchedulerApp({ authUser, onLogout }) {
                       <button
                         key={appointment.id}
                         type="button"
-                        className={`month-appointment ${
+                        className={`month-appointment ${isLastSessionAppointment(appointment) ? "month-appointment-last" : ""} ${
                           isSameMonth(appointment.patient.billing_month, weekAnchor) ? "month-appointment-new" : ""
                         }`}
                         onClick={() => {
@@ -1718,6 +2097,9 @@ function SchedulerApp({ authUser, onLogout }) {
                           openAppointmentEditor(appointment);
                         }}
                       >
+                        {isLastSessionAppointment(appointment) ? (
+                          <span className="month-appointment-flag">Ultimo turno</span>
+                        ) : null}
                         <strong>{appointment.patient.full_name}</strong>
                         <small>{`${appointment.time.slice(0, 5)} · ${appointment.reason || "Sesion"}`}</small>
                       </button>
@@ -1797,8 +2179,7 @@ export default function App() {
         has_recovery_phone: Boolean(setupForm.phone.trim()),
       });
 
-      const message = encodeURIComponent(buildRecoveryCodeMessage(response.recovery_code));
-      const whatsappPhone = sanitizeWhatsappNumber(setupForm.phone);
+      const whatsappUrl = buildWhatsappUrl(setupForm.phone, buildRecoveryCodeMessage(response.recovery_code));
 
       await Swal.fire({
         title: "Codigo de recuperacion",
@@ -1808,13 +2189,13 @@ export default function App() {
             <p>Guardalo o envialo a tu celular. Con este codigo podras crear una nueva contraseña.</p>
           </div>
         `,
-        showCancelButton: Boolean(whatsappPhone),
+        showCancelButton: Boolean(whatsappUrl),
         confirmButtonText: "Cerrar",
-        cancelButtonText: "Enviar a WhatsApp",
+        cancelButtonText: "Abrir WhatsApp Web",
         reverseButtons: true,
       }).then((result) => {
-        if (result.dismiss === Swal.DismissReason.cancel && whatsappPhone) {
-          window.open(`https://wa.me/${whatsappPhone}?text=${message}`, "_blank", "noopener,noreferrer");
+        if (result.dismiss === Swal.DismissReason.cancel && whatsappUrl) {
+          window.open(whatsappUrl, "_blank", "noopener,noreferrer");
         }
       });
     } catch (error) {
@@ -1890,9 +2271,8 @@ export default function App() {
         username,
         phone: recoverForm.phone.trim() || null,
       });
-      const whatsappPhone = sanitizeWhatsappNumber(response.phone);
-
-      if (!whatsappPhone) {
+      const whatsappUrl = buildWhatsappUrl(response.phone, buildRecoveryCodeMessage(response.recovery_code));
+      if (!whatsappUrl) {
         throw new Error("No hay un telefono valido para WhatsApp.");
       }
 
@@ -1907,8 +2287,7 @@ export default function App() {
         has_recovery_phone: true,
       }));
 
-      const message = encodeURIComponent(buildRecoveryCodeMessage(response.recovery_code));
-      window.open(`https://wa.me/${whatsappPhone}?text=${message}`, "_blank", "noopener,noreferrer");
+      window.open(whatsappUrl, "_blank", "noopener,noreferrer");
 
       await Swal.fire({
         title: "Codigo enviado",

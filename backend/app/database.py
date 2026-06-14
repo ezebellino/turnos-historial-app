@@ -35,6 +35,10 @@ def init_db():
             )
         if "photo_filename" not in patient_columns:
             connection.execute(text("ALTER TABLE patients ADD COLUMN photo_filename VARCHAR(255)"))
+        if "care_mode" not in patient_columns:
+            connection.execute(
+                text("ALTER TABLE patients ADD COLUMN care_mode VARCHAR(20) NOT NULL DEFAULT 'institutional'")
+            )
         if "treatment_start_date" not in patient_columns:
             connection.execute(text("ALTER TABLE patients ADD COLUMN treatment_start_date DATE"))
         if "billing_month" not in patient_columns:
@@ -62,6 +66,10 @@ def init_db():
             user_columns = {column["name"] for column in inspector.get_columns("users")}
             if "phone" not in user_columns:
                 connection.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(40)"))
+            if "institutional_rate" not in user_columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN institutional_rate INTEGER NOT NULL DEFAULT 0"))
+            if "domiciliary_rate" not in user_columns:
+                connection.execute(text("ALTER TABLE users ADD COLUMN domiciliary_rate INTEGER NOT NULL DEFAULT 0"))
 
 
 def get_db():

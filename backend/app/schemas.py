@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 AppointmentStatus = Literal["scheduled", "completed", "cancelled"]
+CareMode = Literal["institutional", "domiciliary"]
 
 
 class PatientBase(BaseModel):
@@ -13,6 +14,7 @@ class PatientBase(BaseModel):
     email: EmailStr | None = None
     diagnosis: str | None = Field(default=None, max_length=160)
     notes: str | None = None
+    care_mode: CareMode = "institutional"
     prescribed_sessions: int = Field(default=0, ge=0, le=120)
     treatment_start_date: dt_date | None = None
     billing_month: dt_date | None = None
@@ -41,7 +43,23 @@ class PatientUpdate(BaseModel):
     email: EmailStr | None = None
     diagnosis: str | None = Field(default=None, max_length=160)
     notes: str | None = None
+    care_mode: CareMode | None = None
     prescribed_sessions: int | None = Field(default=None, ge=0, le=120)
+    treatment_start_date: dt_date | None = None
+    billing_month: dt_date | None = None
+    session_price: int | None = Field(default=None, ge=0, le=1_000_000)
+    preferred_time: dt_time | None = None
+    preferred_weekdays: list[int] | None = None
+    auto_schedule_enabled: bool | None = None
+
+    @field_validator("preferred_weekdays", mode="before")
+    @classmethod
+    def parse_update_preferred_weekdays(cls, value):
+        if value is None or value == "":
+            return value
+        if isinstance(value, str):
+            return [int(chunk) for chunk in value.split(",") if chunk != ""]
+        return value
 
 
 class PatientRead(PatientBase):
@@ -99,6 +117,21 @@ class DashboardSummary(BaseModel):
     current_month_new_patients: int
     monthly_patient_limit: int
     current_month_projected_revenue: int
+
+
+class PricingSettingsRead(BaseModel):
+    institutional_rate: int
+    domiciliary_rate: int
+
+
+class PricingSettingsUpdate(BaseModel):
+    institutional_rate: int = Field(ge=0, le=1_000_000)
+    domiciliary_rate: int = Field(ge=0, le=1_000_000)
+
+
+class PricingBulkApplyRequest(BaseModel):
+    amount: int = Field(ge=0, le=1_000_000)
+    scope: Literal["all", "institutional", "domiciliary"] = "all"
 
 
 class AuthStatus(BaseModel):

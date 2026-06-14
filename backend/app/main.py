@@ -26,6 +26,9 @@ from .schemas import (
     PatientCreate,
     PatientRead,
     PatientUpdate,
+    PricingBulkApplyRequest,
+    PricingSettingsRead,
+    PricingSettingsUpdate,
     RecoverRequest,
     RecoveryCodeRequest,
     RecoveryCodeResponse,
@@ -144,6 +147,7 @@ def sync_due_appointments(db: Session):
 
     if changed:
         db.commit()
+    sync_session_numbers(db)
 
 
 def read_appointment_or_404(appointment_id: int, db: Session):
@@ -225,6 +229,36 @@ def assign_session_numbers(patient: Patient, db: Session):
     db.flush()
 
 
+def sync_session_numbers(db: Session):
+    patients = db.scalars(
+        select(Patient).options(joinedload(Patient.appointments))
+    ).unique().all()
+    changed = False
+
+    for patient in patients:
+        active_appointments = [
+            appointment
+            for appointment in sorted(patient.appointments, key=appointment_key)
+            if appointment.status != "cancelled"
+        ]
+
+        for index, appointment in enumerate(active_appointments, start=1):
+            if appointment.session_number != index:
+                appointment.session_number = index
+                changed = True
+
+        cancelled_appointments = [
+            appointment for appointment in patient.appointments if appointment.status == "cancelled"
+        ]
+        for appointment in cancelled_appointments:
+            if appointment.session_number is not None:
+                appointment.session_number = None
+                changed = True
+
+    if changed:
+        db.commit()
+
+
 def ensure_month_capacity(db: Session, billing_month: date, exclude_patient_id: int | None = None):
     current_month = month_floor(date.today())
     if billing_month != current_month:
@@ -245,9 +279,38 @@ def ensure_month_capacity(db: Session, billing_month: date, exclude_patient_id: 
 def normalize_patient_fields(payload: PatientCreate | PatientUpdate) -> dict:
     values = payload.model_dump(exclude_unset=True)
     if "preferred_weekdays" in values:
-        values["preferred_weekdays"] = serialize_weekdays(values["preferred_weekdays"])
+        values["preferred_weekdays"] = serialize_weekdays(values["preferred_weekdays"] or [])
     if values.get("treatment_start_date") and not values.get("billing_month"):
         values["billing_month"] = month_floor(values["treatment_start_date"])
+    return values
+
+
+def resolve_care_mode_rate(user: User, care_mode: str) -> int:
+    if care_mode == "domiciliary":
+        return user.domiciliary_rate
+    return user.institutional_rate
+
+
+def apply_default_session_price(
+    values: dict,
+    user: User,
+    current_patient: Patient | None = None,
+):
+    next_mode = values.get("care_mode") or (current_patient.care_mode if current_patient else "institutional")
+
+    if current_patient is None:
+        if not values.get("session_price"):
+            values["session_price"] = resolve_care_mode_rate(user, next_mode)
+        return values
+
+    if "session_price" in values:
+        if values["session_price"] == 0:
+            values["session_price"] = resolve_care_mode_rate(user, next_mode)
+        return values
+
+    if "care_mode" in values and values["care_mode"] != current_patient.care_mode:
+        values["session_price"] = resolve_care_mode_rate(user, values["care_mode"])
+
     return values
 
 
@@ -325,7 +388,12 @@ def regenerate_all_schedules(db: Session):
         regenerate_patient_schedule(patient_id, db)
 
 
-def validate_business_rules(payload: AppointmentCreate, db: Session, appointment_id: int | None = None):
+def validate_business_rules(
+    payload: AppointmentCreate,
+    db: Session,
+    appointment_id: int | None = None,
+    patient: Patient | None = None,
+):
     if payload.date.weekday() > 4:
         raise HTTPException(status_code=400, detail="Solo se permiten turnos de lunes a viernes.")
 
@@ -335,6 +403,13 @@ def validate_business_rules(payload: AppointmentCreate, db: Session, appointment
 
     if start_time < time(hour=WORK_START_HOUR) or end_time > time(hour=WORK_END_HOUR):
         raise HTTPException(status_code=400, detail="El horario debe estar entre las 08:00 y las 20:00.")
+
+    holiday_dates = list_holiday_dates(db)
+    if payload.date in holiday_dates and patient and patient.care_mode != "domiciliary":
+        raise HTTPException(
+            status_code=400,
+            detail="Ese dia esta cargado como feriado. Solo puedes agendarlo si el paciente es domiciliario.",
+        )
 
     overlapping_query = select(Appointment).where(
         Appointment.patient_id == payload.patient_id,
@@ -391,6 +466,8 @@ def auth_setup(payload: SetupRequest, db: Session = Depends(get_db)):
         phone=payload.phone.strip() if payload.phone else None,
         password_hash=hash_secret(payload.password),
         recovery_code_hash=hash_secret(recovery_code),
+        institutional_rate=0,
+        domiciliary_rate=0,
     )
     db.add(user)
     db.commit()
@@ -492,6 +569,56 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     )
 
 
+@app.get("/settings/pricing", response_model=PricingSettingsRead)
+def get_pricing_settings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return PricingSettingsRead(
+        institutional_rate=current_user.institutional_rate,
+        domiciliary_rate=current_user.domiciliary_rate,
+    )
+
+
+@app.put("/settings/pricing", response_model=PricingSettingsRead)
+def update_pricing_settings(
+    payload: PricingSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.institutional_rate = payload.institutional_rate
+    current_user.domiciliary_rate = payload.domiciliary_rate
+    db.commit()
+    return PricingSettingsRead(
+        institutional_rate=current_user.institutional_rate,
+        domiciliary_rate=current_user.domiciliary_rate,
+    )
+
+
+@app.post("/settings/pricing/apply", response_model=PricingSettingsRead)
+def bulk_apply_pricing(
+    payload: PricingBulkApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.scope == "all":
+        current_user.institutional_rate = payload.amount
+        current_user.domiciliary_rate = payload.amount
+        patients = db.scalars(select(Patient)).all()
+    else:
+        if payload.scope == "institutional":
+            current_user.institutional_rate = payload.amount
+        else:
+            current_user.domiciliary_rate = payload.amount
+        patients = db.scalars(select(Patient).where(Patient.care_mode == payload.scope)).all()
+
+    for patient in patients:
+        patient.session_price = payload.amount
+
+    db.commit()
+    return PricingSettingsRead(
+        institutional_rate=current_user.institutional_rate,
+        domiciliary_rate=current_user.domiciliary_rate,
+    )
+
+
 @app.get("/holidays", response_model=list[HolidayRead])
 def list_holidays(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     return list(db.scalars(select(Holiday).order_by(Holiday.date.asc())).all())
@@ -535,8 +662,9 @@ def list_patients(
 
 
 @app.post("/patients", response_model=PatientRead, status_code=201)
-def create_patient(payload: PatientCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def create_patient(payload: PatientCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     values = normalize_patient_fields(payload)
+    values = apply_default_session_price(values, current_user)
     billing_month = values.get("billing_month", month_floor(date.today()))
     ensure_month_capacity(db, billing_month)
     values.setdefault("billing_month", billing_month)
@@ -556,13 +684,14 @@ def update_patient(
     patient_id: int,
     payload: PatientUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     patient = db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Paciente no encontrado.")
 
     changes = normalize_patient_fields(payload)
+    changes = apply_default_session_price(changes, current_user, patient)
     billing_month = changes.get("billing_month", patient.billing_month or month_floor(date.today()))
     ensure_month_capacity(db, billing_month, exclude_patient_id=patient_id)
     changes.setdefault("billing_month", billing_month)
@@ -671,7 +800,7 @@ def create_appointment(
     if not patient:
         raise HTTPException(status_code=404, detail="Paciente no encontrado.")
 
-    validate_business_rules(payload, db)
+    validate_business_rules(payload, db, patient=patient)
 
     appointment = Appointment(**payload.model_dump(), autogenerated=False, manual_override=False)
     db.add(appointment)
@@ -680,6 +809,8 @@ def create_appointment(
 
     if patient_plan_ready(patient):
         regenerate_patient_schedule(patient.id, db)
+    else:
+        sync_session_numbers(db)
     return read_appointment_or_404(appointment.id, db)
 
 
@@ -696,10 +827,12 @@ def update_appointment(
 
     changes = payload.model_dump(exclude_unset=True)
     previous_patient_id = appointment.patient_id
+    target_patient = appointment.patient
     if "patient_id" in changes:
         patient = db.get(Patient, changes["patient_id"])
         if not patient:
             raise HTTPException(status_code=404, detail="Paciente no encontrado.")
+        target_patient = patient
 
     if {"patient_id", "date", "time", "duration_minutes"} & changes.keys():
         merged_payload = AppointmentCreate(
@@ -711,7 +844,7 @@ def update_appointment(
             reason=changes.get("reason", appointment.reason),
             evolution_note=changes.get("evolution_note", appointment.evolution_note),
         )
-        validate_business_rules(merged_payload, db, appointment_id=appointment_id)
+        validate_business_rules(merged_payload, db, appointment_id=appointment_id, patient=target_patient)
 
     scheduling_keys = {"patient_id", "date", "time"}
     if appointment.autogenerated and scheduling_keys & changes.keys():
@@ -726,8 +859,12 @@ def update_appointment(
     previous_patient = db.get(Patient, previous_patient_id)
     if current_patient and patient_plan_ready(current_patient):
         regenerate_patient_schedule(current_patient.id, db)
+    elif current_patient:
+        sync_session_numbers(db)
     if previous_patient and previous_patient.id != appointment.patient_id and patient_plan_ready(previous_patient):
         regenerate_patient_schedule(previous_patient.id, db)
+    elif previous_patient and previous_patient.id != appointment.patient_id:
+        sync_session_numbers(db)
 
     return read_appointment_or_404(appointment.id, db)
 
@@ -749,3 +886,5 @@ def delete_appointment(
     patient = db.get(Patient, patient_id)
     if patient and patient_plan_ready(patient):
         regenerate_patient_schedule(patient.id, db)
+    else:
+        sync_session_numbers(db)

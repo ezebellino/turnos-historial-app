@@ -58,6 +58,24 @@ export function fetchDashboard() {
   return request("/dashboard");
 }
 
+export function fetchPricingSettings() {
+  return request("/settings/pricing");
+}
+
+export function updatePricingSettings(payload) {
+  return request("/settings/pricing", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function applyBulkPricing(payload) {
+  return request("/settings/pricing/apply", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchHolidays() {
   return request("/holidays");
 }
